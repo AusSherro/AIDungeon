@@ -14,6 +14,13 @@ Config.validate()
 
 app = Flask(__name__)
 
+# Register web portal blueprint
+try:
+    from webportal.routes import portal_bp
+    app.register_blueprint(portal_bp, url_prefix='/portal')
+except Exception as e:
+    print(f"Failed to register portal blueprint: {e}")
+
 @app.route('/dm', methods=['POST'])
 def dm():
     data = request.get_json()

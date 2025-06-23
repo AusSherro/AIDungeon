@@ -20,10 +20,11 @@ A modular, voice-enabled AI Dungeon Master using GPT-4o and ElevenLabs, with Dis
    copy .env.example .env
    # Edit .env and add your API keys
    ```
-4. **Run the Flask API:**
+4. **Run the Flask API and web portal:**
    ```powershell
    python app.py
    ```
+   Visit `http://localhost:5000/portal/` in your browser to view the character portal.
 5. **Run the Discord bot:**
    ```powershell
    python discord_bot.py
@@ -63,6 +64,11 @@ curl -X POST http://localhost:5000/dm -H "Content-Type: application/json" -d '{"
 - Remove from inventory: `/inventory remove "Item"`
 - View inventory: `/inventory view`
 - Character data is stored per Discord user in `/characters/` as JSON files.
+
+### 🌐 Web Portal
+
+When `python app.py` is running, open `http://localhost:5000/portal/` to browse all
+registered characters and view their inventories.
 
 ---
 
