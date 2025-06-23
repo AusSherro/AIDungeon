@@ -9,6 +9,7 @@ openai.api_key = os.getenv('OPENAI_API_KEY')
 ROLL_PATTERN = re.compile(r'roll (?:a |an )?(\d*d\d+|d20)', re.IGNORECASE)
 # Support "DC 15" or "need 15 or higher" styles
 DC_PATTERN = re.compile(r'(?:dc\s*(\d+)|need (\d+) or higher)', re.IGNORECASE)
+LOOT_PATTERN = re.compile(r'you (?:find|found|pick up|obtain|grab) (?:a|an|the)?\s*"?([^"\n]+)"?', re.IGNORECASE)
 
 def detect_roll_request(text, player_id=None):
     """Return pending_roll dict if the text asks for a dice roll."""
@@ -24,7 +25,7 @@ def detect_roll_request(text, player_id=None):
             pending['dc'] = int(dc_value)
     return pending
 
-SYSTEM_PROMPT = (
+DEFAULT_SYSTEM_PROMPT = (
     "You are a Dungeon Master AI for a D&D 5e campaign. Respond to player actions with immersive narration and character dialogue. "
     "Label all character speech with [Voice: Character Name] tags. Narration should be labeled [Voice: Narrator] or left untagged. "
     "Keep track of the story, locations, and NPCs.\n\n"
@@ -45,8 +46,8 @@ SYSTEM_PROMPT = (
     "You: 'You find purchase and haul yourself over the top!'"
 )
 
-def get_dm_response(user_input, state, player_id=None):
-    messages = state.get('messages', [])
+def get_dm_response(user_input, state, player_id=None, system_prompt=None):
+    messages = state.get('prompt_history', [])
     # Add character and combat state context
     char_state = state.get('characters', {})
     combat_state = state.get('combat', {})
@@ -62,7 +63,7 @@ def get_dm_response(user_input, state, player_id=None):
     try:
         response = openai.ChatCompletion.create(
             model="gpt-4o",
-            messages=[{"role": "system", "content": SYSTEM_PROMPT}] + messages,
+            messages=[{"role": "system", "content": system_prompt or DEFAULT_SYSTEM_PROMPT}] + messages,
             max_tokens=500,
             temperature=0.9
         )
@@ -72,11 +73,19 @@ def get_dm_response(user_input, state, player_id=None):
         reply = "The mystical energies are disrupted... please try again."
     
     # Update state and check for roll requests
-    state['messages'] = messages + [{"role": "assistant", "content": reply}]
+    state['prompt_history'] = messages + [{"role": "assistant", "content": reply}]
+    if len(state['prompt_history']) > 10:
+        state['prompt_history'] = state['prompt_history'][-10:]
     pending = detect_roll_request(reply, player_id)
     if pending:
         state['pending_roll'] = pending
+    loot_match = LOOT_PATTERN.search(reply)
+    if loot_match:
+        state.setdefault('recent_loot', []).append(loot_match.group(1).strip())
     return reply, state
+
+import json as _json
+
 
 def generate_campaign(state, prompt=None):
     """
@@ -85,8 +94,8 @@ def generate_campaign(state, prompt=None):
     Returns (campaign_text, updated_state)
     """
     system_prompt = (
-        "You're a worldbuilder AI. Generate a new D&D-style campaign with a title, setting, and plot hook. "
-        "Format as: Title, Setting, Plot Hook."
+        "You're a worldbuilder AI. Create a new D&D-style campaign intro."
+        " Respond in JSON with keys: campaign_title, realm, plot_hook, location, intro."
     )
     user_input = prompt if prompt else "Begin a new adventure"
     
@@ -103,8 +112,46 @@ def generate_campaign(state, prompt=None):
         campaign_text = response.choices[0].message['content']
     except Exception as e:
         print(f"OpenAI API Error: {e}")
-        campaign_text = "A mysterious adventure awaits..."
-    
-    # Save campaign in state
-    state['campaign'] = campaign_text
-    return campaign_text, state
+        campaign_text = "{\"campaign_title\": \"Untitled Adventure\", \"realm\": \"Unknown Realm\", \"plot_hook\": \"\", \"location\": \"Nowhere\", \"intro\": \"A mysterious adventure awaits...\"}"
+
+    try:
+        data = _json.loads(campaign_text)
+    except Exception:
+        data = {
+            "campaign_title": "Untitled Adventure",
+            "realm": "Unknown Realm",
+            "plot_hook": "",
+            "location": "Starting Point",
+            "intro": campaign_text,
+        }
+
+    state.update({
+        "campaign_title": data.get("campaign_title", "Untitled Adventure"),
+        "realm": data.get("realm", "Unknown Realm"),
+        "plot_hook": data.get("plot_hook", ""),
+        "location": data.get("location", "Starting Point"),
+        "prompt_history": [],
+    })
+
+    return data.get("intro", campaign_text), state
+
+
+def summarize_history(state, max_entries=10):
+    """Summarize recent prompt history for a session."""
+    history = state.get("prompt_history", [])[-max_entries:]
+    messages = [
+        {"role": "system", "content": "Summarize these recent campaign events into a brief recap, as a Dungeon Master would."}
+    ]
+    messages.extend(history)
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4o",
+            messages=messages,
+            max_tokens=150,
+            temperature=0.7,
+        )
+        return response.choices[0].message['content']
+    except Exception as e:
+        print(f"OpenAI Recap Error: {e}")
+        return "Previously on your adventure..."
