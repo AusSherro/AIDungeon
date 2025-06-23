@@ -46,3 +46,9 @@ htmlcov/
 # Environment settings
 .env
 .env.*
+!.env.example
+# Runtime data
+characters/*.json
+logs/*.md
+state/*.json
+combat/*.json

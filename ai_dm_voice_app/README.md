@@ -166,3 +166,6 @@ ai_dm_voice_app/
 - Auto-save and undo/rewind supported
 
 ---
+
+##  License
+This project is licensed under the MIT License. See [LICENSE](../LICENSE) for details.

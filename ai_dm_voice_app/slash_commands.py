@@ -35,7 +35,7 @@ def register_commands(bot: Bot):
         log_message(channel_id, interaction.user.display_name, f"/act {user_action}")
         from services.openai_service import get_dm_response
         from utils.voice_parser import extract_voice_tag, clean_text
-        narration, updated_state = get_dm_response(user_action, state)
+        narration, updated_state = get_dm_response(user_action, state, current_player_id)
         voice_tag = extract_voice_tag(narration)
         text = clean_text(narration)
         pending = updated_state.get('pending_roll')
@@ -142,7 +142,7 @@ def register_commands(bot: Bot):
         from services.openai_service import get_dm_response
         from utils.voice_parser import extract_voice_tag, clean_text
         try:
-            narration, updated_state = get_dm_response(gpt_input, state)
+            narration, updated_state = get_dm_response(gpt_input, state, str(interaction.user.id))
         except Exception as e:
             await interaction.response.send_message(f"Error: {e}", ephemeral=True)
             return
