@@ -7,7 +7,8 @@ load_dotenv()
 openai.api_key = os.getenv('OPENAI_API_KEY')
 
 ROLL_PATTERN = re.compile(r'roll (?:a |an )?(\d*d\d+|d20)', re.IGNORECASE)
-DC_PATTERN = re.compile(r'need (\d+) or higher', re.IGNORECASE)
+# Support "DC 15" or "need 15 or higher" styles
+DC_PATTERN = re.compile(r'(?:dc\s*(\d+)|need (\d+) or higher)', re.IGNORECASE)
 
 def detect_roll_request(text, player_id=None):
     """Return pending_roll dict if the text asks for a dice roll."""
@@ -18,24 +19,30 @@ def detect_roll_request(text, player_id=None):
     dc_match = DC_PATTERN.search(text)
     pending = {'type': dice, 'player_id': player_id}
     if dc_match:
-        pending['dc'] = int(dc_match.group(1))
+        dc_value = dc_match.group(1) or dc_match.group(2)
+        if dc_value:
+            pending['dc'] = int(dc_value)
     return pending
 
 SYSTEM_PROMPT = (
     "You are a Dungeon Master AI for a D&D 5e campaign. Respond to player actions with immersive narration and character dialogue. "
     "Label all character speech with [Voice: Character Name] tags. Narration should be labeled [Voice: Narrator] or left untagged. "
     "Keep track of the story, locations, and NPCs.\n\n"
-    "When a player attempts something that could fail, ask for a d20 roll:\n"
-    "- Easy tasks: 'Roll a d20, you need 10 or higher'\n"
-    "- Normal tasks: 'Roll a d20, you need 15 or higher'\n"
-    "- Hard tasks: 'Roll a d20, you need 20 or higher'\n\n"
-    "Keep it simple - just ask for the roll and wait for their response. "
-    "After they tell you the number, narrate the outcome dramatically.\n\n"
+    "Use the full range of difficulty classes when a check is required:\n"
+    "- Very Easy DC 5\n"
+    "- Easy DC 10\n"
+    "- Medium DC 15\n"
+    "- Hard DC 20\n"
+    "- Very Hard DC 25\n"
+    "- Nearly Impossible DC 30\n"
+    "Mention the relevant ability or skill, saving throw, or attack roll. Include proficiency bonuses and whether the roll has advantage or disadvantage when appropriate. "
+    "For combat, remind players about initiative, attacking against Armor Class, tracking hit points, and applying conditions. "
+    "Keep it simple: ask for the roll, await the result, then narrate the outcome dramatically.\n\n"
     "Example:\n"
     "Player: 'I try to climb the wall'\n"
-    "You: 'The wall is slippery from the rain. Roll a d20, you need 15 or higher to climb it.'\n"
+    "You: 'The wall is slick. Make a Strength (Athletics) check, DC 15.'\n"
     "Player: 'I got 17'\n"
-    "You: 'You find good handholds and pull yourself up successfully!'"
+    "You: 'You find purchase and haul yourself over the top!'"
 )
 
 def get_dm_response(user_input, state, player_id=None):

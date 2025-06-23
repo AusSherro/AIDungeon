@@ -15,7 +15,9 @@ Successfully removed **11 empty files** and **2 unused directories**:
 
 **Files Removed:**
 - `startup.py` (empty)
-- `slash_commands.py` (empty) 
+- `slash_commands.py` (unused)
+- `debug_bot.py` (unused)
+- `cleanup.py` (obsolete)
 - `docker-compose.yml` (unused)
 - `discord_bot_improved.py` (duplicate)
 - `deploy.py` (empty)
