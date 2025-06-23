@@ -66,10 +66,30 @@ def next_turn(channel_id):
     for _ in range(n):
         state['current_turn'] = (state['current_turn'] + 1) % n
         active = state['turn_order'][state['current_turn']]
-        if active.get('hp', 1) > 0 and 'unconscious' not in active.get('status', []):
+        if active.get('hp', 1) > 0 and 'unconscious' not in active.get('status', []) and 'dead' not in active.get('status', []):
             break
     save_combat(channel_id, state)
     return state
+
+def attack(channel_id, attacker_id, target_name, attack_bonus, damage_dice):
+    """Resolve an attack roll and apply damage."""
+    state = load_combat(channel_id)
+    if not state or not state.get('active'):
+        return None
+    attacker = next((c for c in state['combatants'] if str(c.get('id')) == str(attacker_id)), None)
+    target = next((c for c in state['combatants'] if c['name'].lower() == target_name.lower()), None)
+    if not attacker or not target:
+        return None
+    roll = roll_dice('1d20')[0] + attack_bonus
+    hit = roll >= target.get('ac', 10)
+    damage = 0
+    if hit:
+        damage = roll_dice(damage_dice)[0]
+        target['hp'] = max(0, target.get('hp', 0) - damage)
+        if target['hp'] == 0:
+            target.setdefault('status', []).append('unconscious')
+    save_combat(channel_id, state)
+    return {'roll': roll, 'hit': hit, 'damage': damage, 'target': target['name'], 'target_hp': target['hp']}
 
 def add_reaction(channel_id, user_id, reaction):
     state = load_combat(channel_id)

@@ -1,9 +1,25 @@
 import openai
 import os
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
 openai.api_key = os.getenv('OPENAI_API_KEY')
+
+ROLL_PATTERN = re.compile(r'roll (?:a |an )?(\d*d\d+|d20)', re.IGNORECASE)
+DC_PATTERN = re.compile(r'need (\d+) or higher', re.IGNORECASE)
+
+def detect_roll_request(text, player_id=None):
+    """Return pending_roll dict if the text asks for a dice roll."""
+    match = ROLL_PATTERN.search(text)
+    if not match:
+        return None
+    dice = match.group(1)
+    dc_match = DC_PATTERN.search(text)
+    pending = {'type': dice, 'player_id': player_id}
+    if dc_match:
+        pending['dc'] = int(dc_match.group(1))
+    return pending
 
 SYSTEM_PROMPT = (
     "You are a Dungeon Master AI for a D&D 5e campaign. Respond to player actions with immersive narration and character dialogue. "
@@ -22,7 +38,7 @@ SYSTEM_PROMPT = (
     "You: 'You find good handholds and pull yourself up successfully!'"
 )
 
-def get_dm_response(user_input, state):
+def get_dm_response(user_input, state, player_id=None):
     messages = state.get('messages', [])
     # Add character and combat state context
     char_state = state.get('characters', {})
@@ -48,8 +64,11 @@ def get_dm_response(user_input, state):
         print(f"OpenAI API Error: {e}")
         reply = "The mystical energies are disrupted... please try again."
     
-    # Update state
+    # Update state and check for roll requests
     state['messages'] = messages + [{"role": "assistant", "content": reply}]
+    pending = detect_roll_request(reply, player_id)
+    if pending:
+        state['pending_roll'] = pending
     return reply, state
 
 def generate_campaign(state, prompt=None):

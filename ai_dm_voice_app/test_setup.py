@@ -102,6 +102,39 @@ def test_state_manager():
         print(f"❌ State manager test failed: {e}")
         return False
 
+def test_pending_roll_detection():
+    print("🧪 Testing pending roll detection...")
+    try:
+        from services.openai_service import detect_roll_request
+        text = "The goblin growls. Roll a d20, you need 15 or higher."
+        pending = detect_roll_request(text, "123")
+        if pending and pending['type'] in ('d20', '1d20') and pending.get('dc') == 15 and pending['player_id'] == '123':
+            print("✅ Pending roll detected correctly")
+            return True
+        print(f"❌ Pending roll incorrect: {pending}")
+        return False
+    except Exception as e:
+        print(f"❌ Pending roll test failed: {e}")
+        return False
+
+def test_attack_resolution():
+    print("🧪 Testing attack resolution...")
+    try:
+        from utils.combat_manager import start_combat, attack, end_combat, roll_initiative
+        channel = 'test_chan'
+        start_combat(channel, [('1', 'Hero')], [{'name':'Goblin','hp':5,'ac':10}])
+        roll_initiative(channel)
+        result = attack(channel, '1', 'Goblin', 5, '1d4')
+        end_combat(channel)
+        if result and 'hit' in result:
+            print("✅ Attack function executed")
+            return True
+        print("❌ Attack function failed")
+        return False
+    except Exception as e:
+        print(f"❌ Attack test failed: {e}")
+        return False
+
 async def main():
     """Run all tests"""
     print("🚀 Starting bot setup verification...\n")
@@ -110,6 +143,8 @@ async def main():
         ("Configuration", test_config),
         ("State Manager", test_state_manager),
         ("Command Registration", test_command_registration),
+        ("Pending Roll", test_pending_roll_detection),
+        ("Attack", test_attack_resolution),
     ]
     
     passed = 0

@@ -9,6 +9,7 @@ import tempfile
 import zipfile
 from typing import Optional
 from dotenv import load_dotenv
+from config import Config
 
 from services.openai_service import get_dm_response, generate_campaign
 from services.elevenlabs_service import text_to_speech
@@ -21,6 +22,7 @@ from utils.character_manager import register_character, load_character, set_stat
 from utils.combat_manager import start_combat, roll_initiative, next_turn, get_active_combatant, end_combat, load_combat, save_combat
 
 load_dotenv()
+Config.validate()
 
 DISCORD_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
 DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")
@@ -135,19 +137,37 @@ async def d20_slash(interaction: discord.Interaction):
     await interaction.response.send_message(msg)
     log_message(str(interaction.channel.id), interaction.user.display_name, f"d20 roll: {result}")
 
-@bot.tree.command(name="attack", description="Roll to attack")
-async def attack_slash(interaction: discord.Interaction):
-    """Roll a d20 for attacks"""
-    result = random.randint(1, 20)
-    if result == 20:
-        msg = f"⚔️ **CRITICAL HIT!** Attack roll: **{result}**"
-    elif result == 1:
-        msg = f"⚔️ **CRITICAL MISS!** Attack roll: **{result}**"
+@bot.tree.command(name="attack", description="Attack a target in combat")
+@app_commands.describe(target="Target name", bonus="Attack bonus", damage="Damage dice e.g. 1d8+2")
+async def attack_slash(interaction: discord.Interaction, target: str, bonus: int, damage: str):
+    channel_id = str(interaction.channel.id)
+    from utils.combat_manager import attack
+    result = attack(channel_id, str(interaction.user.id), target, bonus, damage)
+    if not result:
+        await interaction.response.send_message("No combat in progress or target not found.")
+        return
+    if result['hit']:
+        msg = f"{interaction.user.display_name} hits {target} for {result['damage']} damage! ({result['target_hp']} HP left)"
     else:
-        msg = f"⚔️ Attack roll: **{result}**"
-    
+        msg = f"{interaction.user.display_name} misses {target}! (Roll {result['roll']})"
     await interaction.response.send_message(msg)
-    log_message(str(interaction.channel.id), interaction.user.display_name, f"Attack roll: {result}")
+    log_message(channel_id, interaction.user.display_name, msg)
+
+@bot.tree.command(name="cast", description="Cast a spell at a target")
+@app_commands.describe(spell="Spell name", target="Target name", bonus="Spell attack bonus", damage="Damage dice")
+async def cast_slash(interaction: discord.Interaction, spell: str, target: str, bonus: int, damage: str):
+    channel_id = str(interaction.channel.id)
+    from utils.combat_manager import attack
+    result = attack(channel_id, str(interaction.user.id), target, bonus, damage)
+    if not result:
+        await interaction.response.send_message("No combat in progress or target not found.")
+        return
+    if result['hit']:
+        msg = f"{interaction.user.display_name} casts {spell} and hits {target} for {result['damage']} damage! ({result['target_hp']} HP left)"
+    else:
+        msg = f"{interaction.user.display_name} casts {spell} but misses {target}! (Roll {result['roll']})"
+    await interaction.response.send_message(msg)
+    log_message(channel_id, interaction.user.display_name, msg)
 
 @bot.tree.command(name="exportlog", description="Export the session log as a zip file.")
 async def exportlog_slash(interaction: discord.Interaction):
@@ -334,7 +354,7 @@ async def act(interaction: discord.Interaction, action: str):
     await interaction.response.defer()
 
     # Get the AI narration using get_dm_response
-    narration, updated_state = get_dm_response(action, state)
+    narration, updated_state = get_dm_response(action, state, current_player_id)
     voice_tag = extract_voice_tag(narration)
     text = clean_text(narration)
 

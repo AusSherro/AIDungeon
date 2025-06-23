@@ -7,8 +7,10 @@ from utils.state_manager import load_state, save_state
 import os
 from dotenv import load_dotenv
 import tempfile
+from config import Config
 
 load_dotenv()
+Config.validate()
 
 app = Flask(__name__)
 
@@ -22,7 +24,7 @@ def dm():
     state = load_state(session_id)
 
     # Get GPT-4o response
-    gpt_response, updated_state = get_dm_response(user_input, state)
+    gpt_response, updated_state = get_dm_response(user_input, state, None)
 
     # Extract voice tag and clean text
     voice_tag = extract_voice_tag(gpt_response)
