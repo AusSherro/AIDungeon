@@ -44,8 +44,13 @@ curl -X POST http://localhost:5000/dm -H "Content-Type: application/json" -d '{"
 - Use `/new_campaign [prompt]` in a voice channel to start a campaign and set turn order.
 - The bot will announce the first player and prompt them to act.
 - The current player uses `/act <action>` to take their turn (AI narrates and speaks as before).
+- Narration now ends with 2-3 suggested actions to keep the story moving.
 - When finished, the player uses `/end_turn` to pass to the next player (announced in text and voice).
 - If you try to act out of turn, the bot will remind you to wait.
+- Check your current location: `/whereami`
+- Debug the channel state: `/campaignstate` (ephemeral)
+- Recap recent events: `/recap`
+- Adjust difficulty: `/set-difficulty <easy|normal|hard>` (admin only)
 
 ---
 
@@ -55,6 +60,8 @@ curl -X POST http://localhost:5000/dm -H "Content-Type: application/json" -d '{"
 - View your stats: `/mystats`
 - Set a stat: `/setstat <stat> <value>` (e.g. `/setstat STR 15`)
 - Add to inventory: `/inventory add "Item Name"`
+- Remove from inventory: `/inventory remove "Item"`
+- View inventory: `/inventory view`
 - Character data is stored per Discord user in `/characters/` as JSON files.
 
 ---
@@ -70,6 +77,8 @@ curl -X POST http://localhost:5000/dm -H "Content-Type: application/json" -d '{"
 ## 🎲 Dice Rolling
 
 - Roll dice: `/roll <dice>` (e.g. `/roll 2d6+1`, `/roll 1d20`)
+- Skill check: `/roll athletics` (uses your STR mod, supports --adv/--disadv)
+- Saving throw: `/save WIS vs 14`
 - The bot will also auto-roll if the AI says e.g. "Roll a 1d20" in its response.
 - Dice results are shown in chat and logged.
 - Dice rolls can use character stats and proficiency.
@@ -105,6 +114,7 @@ Find your ElevenLabs voice IDs at https://elevenlabs.io/ and add them here.
 
 ## 🗃️ State Persistence
 - Game state is saved per session (API) or per Discord channel (bot) in the `state/` folder as JSON.
+- Each channel stores its campaign title, realm, plot hook, current location, player list and recent prompt history.
 - You can delete these files to reset a session.
 
 ---

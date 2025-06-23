@@ -83,7 +83,7 @@ def test_state_manager():
         
         # Test load
         loaded_data = load_state(test_session)
-        if loaded_data == test_data:
+        if all(loaded_data.get(k) == v for k, v in test_data.items()):
             print("✅ State load test passed")
         else:
             print(f"❌ State load test failed: {loaded_data} != {test_data}")
