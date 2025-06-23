@@ -1,0 +1,48 @@
+# Ignore Python venvs
+.venv/
+venv/
+**/venv/
+
+# Ignore Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Ignore logs and zips
+*.log
+*.zip
+*.md.zip
+
+# Ignore site-packages
+venv/
+.venv/
+*/venv/
+*/.venv/
+
+# Ignore any dist-info garbage
+**/*.dist-info/
+
+# Ignore IDE/editor config
+.vscode/
+.idea/
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Bytecode cache folders
+*.egg-info/
+.eggs/
+
+# Testing artifacts
+htmlcov/
+.tox/
+.coverage
+.pytest_cache/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Environment settings
+.env
+.env.*

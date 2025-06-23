@@ -1,0 +1,68 @@
+PLAYING D&D 5E WITH THE AI DM DISCORD BOT
+========================================
+
+Welcome to your AI-powered D&D 5e experience! This bot enables turn-based, voice-enhanced adventures with GPT narration, dice validation, and robust state management. Here’s how to play:
+
+---
+GETTING STARTED
+---------------
+1. **Register Your Character**
+   - Use `!register <character name>` to create your character.
+   - Set stats with `!setstat <stat> <value>` (e.g., `!setstat STR 16`).
+   - Add items with `!inventory add "Item Name"`.
+
+2. **Start a Campaign**
+   - Join a voice channel with all players.
+   - One player runs `/start-campaign` (optionally add a prompt for the adventure).
+   - The bot sets the turn order and introduces the campaign.
+
+---
+GAMEPLAY LOOP
+-------------
+- The game is turn-based. Only the current player may act.
+- On your turn, use `/act <action>` to describe what your character does.
+- The AI DM narrates the result. If a roll is needed, you’ll be prompted (e.g., “You must now /roll your DEX check.”).
+- Roll the appropriate dice in real life, then use `/roll <result>` (e.g., `/roll 17`). The bot validates the roll and continues the story.
+- When finished, use `/end_turn` to pass to the next player.
+
+---
+ADMIN COMMANDS
+--------------
+- `/reset-campaign` — Reset the campaign for the channel (admin only).
+- `/force-turn <user>` — Force the turn to a specific player (admin only).
+
+---
+EXAMPLE GAME LOOP (2 Players + Narrator)
+----------------------------------------
+**Players:** Alice and Bob
+
+1. **Setup:**
+   - Both join a voice channel.
+   - Alice: `/start-campaign` (bot introduces the adventure, sets turn order)
+   - Bot: “Alice, it’s your turn. What do you do?”
+
+2. **Turn 1 (Alice):**
+   - Alice: `/act I search the old chest for traps.`
+   - Bot: “You approach the chest. Please roll your Investigation check.”
+   - Alice: (rolls a d20, gets 15) `/roll 15`
+   - Bot: “You find a hidden needle trap and disarm it. What do you do next?”
+   - Alice: `/end_turn`
+
+3. **Turn 2 (Bob):**
+   - Bot: “Bob, it’s your turn. What do you do?”
+   - Bob: `/act I open the chest.”
+   - Bot: “Inside, you find a mysterious amulet. What do you do next?”
+   - Bob: `/end_turn`
+
+4. **Repeat:**
+   - The loop continues, alternating turns, with the AI DM narrating and requesting rolls as needed.
+
+---
+TIPS
+----
+- Only the current player can act or roll.
+- All actions and narration are logged for replay.
+- Use `/mystats` to view your character’s stats and inventory.
+- For help, see the README or ask your admin.
+
+Happy adventuring!

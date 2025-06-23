@@ -1,0 +1,26 @@
+{
+  "combatants": [
+    {
+      "type": "player",
+      "id": "511769613474856978",
+      "name": "Sherro",
+      "hp": 10,
+      "ac": 10,
+      "status": [],
+      "initiative": 14
+    }
+  ],
+  "turn_order": [
+    {
+      "type": "player",
+      "id": "511769613474856978",
+      "name": "Sherro",
+      "hp": 10,
+      "ac": 10,
+      "status": [],
+      "initiative": 14
+    }
+  ],
+  "active": true,
+  "current_turn": 0
+}
