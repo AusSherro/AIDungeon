@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ char.name }}</title>
+</head>
+<body>
+    <h1>{{ char.name }}</h1>
+    <p><strong>Class:</strong> {{ char.class }}</p>
+    <p><strong>Race:</strong> {{ char.race }}</p>
+    <p><strong>Level:</strong> {{ char.level }}</p>
+    <p><strong>HP:</strong> {{ char.hp }}/{{ char.max_hp }}</p>
+    <h2>Abilities</h2>
+    <ul>
+    {% for stat in ['STR','DEX','CON','INT','WIS','CHA'] %}
+        <li>{{ stat }}: {{ char[stat] }}</li>
+    {% endfor %}
+    </ul>
+    <h2>Inventory</h2>
+    {% if char.inventory %}
+    <ul>
+    {% for item in char.inventory %}
+        <li>{{ item }}</li>
+    {% endfor %}
+    </ul>
+    {% else %}
+    <p>No items.</p>
+    {% endif %}
+    <p><a href="{{ url_for('portal.list_characters') }}">Back to list</a></p>
+</body>
+</html>

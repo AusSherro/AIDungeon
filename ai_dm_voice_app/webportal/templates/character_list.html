@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Character List</title>
+</head>
+<body>
+    <h1>Character List</h1>
+    <ul>
+    {% for c in characters %}
+        <li><a href="{{ url_for('portal.character_detail', char_id=c.id) }}">{{ c.name }}</a></li>
+    {% endfor %}
+    </ul>
+</body>
+</html>
