@@ -146,6 +146,7 @@ ai_dm_voice_app/
 ## 🎲 Dice Rolling
 - Dice rolls can use character stats and proficiency.
 - Supports advantage/disadvantage.
+- DM prompts reference the full D&D 5e difficulty classes (DC 5–30) and call out the relevant ability or saving throw, including proficiency bonuses and advantage/disadvantage. They also remind players about initiative order, Armor Class, and hit point tracking.
 - Rolls feed into AI for narrative outcomes.
 
 ## 🧙 Character Sheets
