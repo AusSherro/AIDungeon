@@ -1,6 +1,6 @@
 # ai_dm_voice_app
 
-A modular, voice-enabled AI Dungeon Master using GPT-4o and ElevenLabs, with Discord support and persistent campaign state.
+A modular, voice-enabled AI Dungeon Master using GPT-4o and ElevenLabs, with Discord support, a REST story API and persistent campaign state.
 
 ---
 
@@ -37,8 +37,16 @@ A modular, voice-enabled AI Dungeon Master using GPT-4o and ElevenLabs, with Dis
 
 **Sample curl:**
 ```bash
-curl -X POST http://localhost:5000/dm -H "Content-Type: application/json" -d '{"input": "The party enters the tavern."}' --output response.mp3
+curl -X POST http://localhost:5000/api/story/start \
+     -H "Content-Type: application/json" \
+     -d '{"story_id": "my-story", "genre": "fantasy", "prompt": "A dark forest"}'
+
+curl -X POST http://localhost:5000/api/story/continue \
+     -H "Content-Type: application/json" \
+     -d '{"story_id": "my-story", "action_type": "do", "prompt": "light a torch"}'
 ```
+
+The legacy `/dm` endpoint still works for voice mode.
 
 ### Discord
 - Invite your bot to your server.
