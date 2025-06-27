@@ -52,3 +52,4 @@ characters/*.json
 logs/*.md
 state/*.json
 combat/*.json
+voice_profiles.json

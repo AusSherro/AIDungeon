@@ -10,8 +10,15 @@
 - `/recap` command summarizing recent events.
 - `/set-difficulty` to adjust challenge level.
 - `/inventory view/add/remove` and automatic loot detection.
+- `voice_profiles.json` for dynamic ElevenLabs voice selection.
+- `/set_auto_advance` command to toggle automatic turn advancement.
+- Inline dice parsing in `/act`.
+- Web portal pages for character editing and campaign summaries.
+- Automatic XP awards when enemies are defeated.
 
 ### Changed
 - `/new_campaign` and `/start_adventure` store structured campaign details.
 - `/act` builds a dynamic system prompt from channel state.
+- Voice connections are now managed per guild to avoid memory leaks when the bot joins multiple servers.
+- System prompts now include recent actions and party composition.
 

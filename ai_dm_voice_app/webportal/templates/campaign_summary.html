@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Campaign {{ session_id }}</title>
+</head>
+<body>
+    <h1>Campaign Summary</h1>
+    <pre>{{ state | tojson(indent=2) }}</pre>
+    <p><a href="{{ url_for('portal.list_characters') }}">Characters</a></p>
+</body>
+</html>
