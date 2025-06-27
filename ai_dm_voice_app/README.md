@@ -40,6 +40,33 @@ A modular, voice-enabled AI Dungeon Master using GPT-4o and ElevenLabs, with Dis
 curl -X POST http://localhost:5000/dm -H "Content-Type: application/json" -d '{"input": "The party enters the tavern."}' --output response.mp3
 ```
 
+#### `/api/generate`
+
+Use this endpoint when you only need the raw text from the AI without TTS.
+The body accepts a JSON payload with:
+
+* `prompt` - the player's input or narration seed
+* `action_type` - how to treat the prompt (`do`, `say`, `story`, `continue`)
+    * `do` - describe a player action
+    * `say` - lines of in-character speech
+    * `story` - force narrative exposition
+    * `continue` - keep narrating from the last response
+* `genre` *(optional)* - e.g. `sci-fi`, `horror`, `fantasy`
+* `context` *(optional)* - array of prior messages for additional history
+
+**Sample curl:**
+```bash
+curl -X POST http://localhost:5000/api/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+        "prompt": "Open the ancient door",
+        "action_type": "do",
+        "genre": "fantasy",
+        "context": ["The hallway is dark and cold."]
+      }'
+```
+The response contains JSON with a `text` field describing the next part of the story.
+
 ### Discord
 - Invite your bot to your server.
 - Use `/new_campaign [prompt]` in a voice channel to start a campaign and set turn order.
