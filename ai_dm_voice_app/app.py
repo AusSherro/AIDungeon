@@ -4,6 +4,7 @@ from services.elevenlabs_service import text_to_speech
 from utils.voice_parser import extract_voice_tag, clean_text
 from utils.voice_map import get_voice_id
 from utils.state_manager import load_state, save_state
+import openai
 import os
 from dotenv import load_dotenv
 import tempfile
@@ -23,15 +24,27 @@ except Exception as e:
 
 @app.route('/dm', methods=['POST'])
 def dm():
-    data = request.get_json()
-    user_input = data.get('input', '')
-    session_id = data.get('session_id', 'default')
+    data = request.get_json(silent=True) or {}
+
+    story_id = data.get('story_id')
+    prompt = data.get('prompt')
+
+    if not isinstance(story_id, str) or not story_id.strip():
+        return jsonify({'error': 'Missing or malformed story_id'}), 400
+    if not isinstance(prompt, str) or not prompt.strip():
+        return jsonify({'error': 'Missing or malformed prompt'}), 400
+
+    user_input = prompt
+    session_id = story_id
 
     # Load session state
     state = load_state(session_id)
 
     # Get GPT-4o response
-    gpt_response, updated_state = get_dm_response(user_input, state, None)
+    try:
+        gpt_response, updated_state = get_dm_response(user_input, state, None)
+    except openai.error.OpenAIError as e:
+        return jsonify({'error': f'OpenAI API error: {e}'}), 500
 
     # Extract voice tag and clean text
     voice_tag = extract_voice_tag(gpt_response)
