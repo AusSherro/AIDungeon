@@ -16,6 +16,7 @@ from services.openai_service import get_dm_response, generate_campaign, summariz
 from services.elevenlabs_service import text_to_speech
 from utils.voice_parser import extract_voice_tag, clean_text
 from utils.voice_map import get_voice_id
+from utils.voice_manager import VoiceClientManager
 from utils.state_manager import (
     load_state,
     save_state,
@@ -50,46 +51,15 @@ intents.message_content = True
 intents.voice_states = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Global variable to track voice client
-voice_client = None
+# Voice client manager to handle per-guild connections
+voice_manager = VoiceClientManager()
 
 async def play_audio_in_voice(channel, audio_bytes):
-    """Helper function to manage voice connections and play audio"""
-    global voice_client
-    
+    """Play audio in the given voice channel using the manager."""
     try:
-        # Disconnect existing voice client if it exists
-        if voice_client and voice_client.is_connected():
-            await voice_client.disconnect()
-        
-        # Connect to the new channel
-        voice_client = await channel.connect()
-        
-        # Save audio to temp file
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
-        
-        # Play audio
-        voice_client.play(discord.FFmpegPCMAudio(tmp_path))
-        while voice_client.is_playing():
-            await asyncio.sleep(1)
-        
-        # Disconnect after playing
-        await voice_client.disconnect()
-        voice_client = None
-        
-        # Clean up temp file
-        os.unlink(tmp_path)
-        
+        await voice_manager.play(channel, audio_bytes)
     except Exception as e:
         print(f"Voice error: {e}")
-        if voice_client:
-            try:
-                await voice_client.disconnect()
-            except:
-                pass
-            voice_client = None
 
 DICE_PATTERN = re.compile(r'roll (a |an )?(\d*d\d+([+-]\d+)?)', re.IGNORECASE)
 
@@ -494,6 +464,18 @@ async def set_difficulty(interaction: discord.Interaction, level: str):
     save_state(channel_id, state)
     await interaction.response.send_message(f"Difficulty set to {level}.")
 
+
+@bot.tree.command(name="set_auto_advance", description="Toggle automatic turn advancement")
+async def set_auto_advance(interaction: discord.Interaction, enabled: bool):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("Admins only.", ephemeral=True)
+        return
+    channel_id = str(interaction.channel.id)
+    state = load_state(channel_id)
+    state["auto_advance"] = enabled
+    save_state(channel_id, state)
+    await interaction.response.send_message(f"Auto-advance set to {enabled}")
+
 @bot.tree.command(name="act", description="Take your turn in the campaign.")
 async def act(interaction: discord.Interaction, action: str):
     channel_id = str(interaction.channel.id)
@@ -511,6 +493,12 @@ async def act(interaction: discord.Interaction, action: str):
         return
 
     await interaction.response.defer()
+
+    # Inline dice rolls like "I strike for [1d8+2] damage"
+    from utils.dice_roller import extract_inline_rolls
+    rolls = extract_inline_rolls(action)
+    for notation, result in rolls.items():
+        action = action.replace(f"[{notation}]", f"[{notation}={result}]")
 
     # Build system prompt from current state
     system_prompt = build_system_prompt(state)
@@ -533,6 +521,21 @@ async def act(interaction: discord.Interaction, action: str):
     for item in loot_items:
         add_inventory(current_player_id, item)
         await interaction.followup.send(f"🧳 {interaction.user.display_name} picks up a '{item}' → Added to inventory")
+
+    if state.get("auto_advance"):
+        idx = get_current_turn_index(updated_state)
+        next_idx = (idx + 1) % len(turn_order)
+        set_current_turn_index(updated_state, next_idx)
+        next_player_id = turn_order[next_idx]
+        next_player_mention = f"<@{next_player_id}>"
+        await interaction.followup.send(f"{next_player_mention}, it's your turn.")
+        voice_id = get_voice_id("Narrator")
+        try:
+            audio_bytes = text_to_speech(f"It's your turn, {next_player_mention}", voice_id)
+            if interaction.user.voice and interaction.user.voice.channel:
+                await play_audio_in_voice(interaction.user.voice.channel, audio_bytes)
+        except Exception as e:
+            print(f"TTS Error: {e}")
 
     save_state(channel_id, updated_state)
     log_message(channel_id, interaction.user.display_name, action)

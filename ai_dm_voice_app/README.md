@@ -52,6 +52,7 @@ curl -X POST http://localhost:5000/dm -H "Content-Type: application/json" -d '{"
 - Debug the channel state: `/campaignstate` (ephemeral)
 - Recap recent events: `/recap`
 - Adjust difficulty: `/set-difficulty <easy|normal|hard>` (admin only)
+- The bot manages voice connections per server, so multiple guilds can play simultaneously without issues.
 
 ---
 
@@ -68,7 +69,8 @@ curl -X POST http://localhost:5000/dm -H "Content-Type: application/json" -d '{"
 ### 🌐 Web Portal
 
 When `python app.py` is running, open `http://localhost:5000/portal/` to browse all
-registered characters and view their inventories.
+registered characters, edit them and view campaign summaries. The portal now shows
+combat history and includes a simple DM dashboard for NPC management.
 
 ---
 
@@ -95,16 +97,19 @@ registered characters and view their inventories.
 
 ## 🗣️ Adding New Voices
 
-Edit `utils/voice_map.py`:
-```python
-VOICE_MAP = {
-    'Grumpy Dwarf': 'elevenlabs-voice-id-1',
-    'Elven Queen': 'elevenlabs-voice-id-2',
-    'Narrator': 'dUercWozs0yhe4xBCgZ0',
-    # Add more mappings here
+Create a `voice_profiles.json` file in the project root based on
+`voice_profiles.json.example`:
+
+```json
+{
+  "Narrator": "your-elevenlabs-voice-id",
+  "Grumpy Dwarf": "..."
 }
 ```
-Find your ElevenLabs voice IDs at https://elevenlabs.io/ and add them here.
+
+Use `/setvoice` (coming soon) or edit this file to map character tags to voice
+IDs. The bot loads this file at runtime so you can swap voices without touching
+the code.
 
 ---
 
@@ -115,6 +120,19 @@ Find your ElevenLabs voice IDs at https://elevenlabs.io/ and add them here.
     - If no prompt is given, a default adventure is generated.
 - The campaign is saved in the per-channel state and shown in chat.
 - If you are in a voice channel, the campaign intro will be read aloud using ElevenLabs TTS (Narrator voice).
+
+---
+
+## 🕹️ Gameplay Loop
+
+1. Start a campaign with `/new_campaign` or `/start_adventure`.
+2. The bot announces the turn order and prompts the first player.
+3. On your turn, describe your action with `/act <action>`.
+4. Inline dice like `[1d20+2]` are rolled automatically when you `/act`.
+5. If a roll is required by the DM, use `/roll` or `/save`.
+6. Finish your turn with `/end_turn` (or enable `/set_auto_advance true`).
+7. Acting out of turn triggers a reminder to wait.
+8. Admins can reset a session with `/reset-campaign` or force the turn with `/force-turn <user>`.
 
 ---
 

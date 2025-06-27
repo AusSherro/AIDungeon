@@ -5,6 +5,30 @@ from threading import Lock
 from utils.character_manager import load_character
 from utils.dice_roller import roll_dice
 
+# Allow duplicate enemy names like "Goblin*2" to create Goblin 1, Goblin 2
+def _expand_enemy(enemy):
+    name = enemy['name']
+    count = 1
+    if '*' in name:
+        base, qty = name.split('*', 1)
+        try:
+            count = int(qty)
+            name = base.strip()
+        except ValueError:
+            pass
+    return [
+        {
+            'type': 'enemy',
+            'id': None,
+            'name': f"{name} {i+1}" if count > 1 else name,
+            'hp': enemy['hp'],
+            'ac': enemy['ac'],
+            'status': [],
+            'initiative': 0,
+        }
+        for i in range(count)
+    ]
+
 COMBAT_DIR = os.path.join(os.path.dirname(__file__), '..', 'combat')
 os.makedirs(COMBAT_DIR, exist_ok=True)
 _combat_locks = {}
@@ -36,7 +60,7 @@ def start_combat(channel_id, players, enemies):
         ac = char.get('DEX', 10) if char else 10
         combatants.append({'type': 'player', 'id': user_id, 'name': name, 'hp': hp, 'ac': ac, 'status': [], 'initiative': 0})
     for enemy in enemies:
-        combatants.append({'type': 'enemy', 'id': None, 'name': enemy['name'], 'hp': enemy['hp'], 'ac': enemy['ac'], 'status': [], 'initiative': 0})
+        combatants.extend(_expand_enemy(enemy))
     state = {
         'combatants': combatants,
         'turn_order': [],
@@ -106,6 +130,34 @@ def get_active_combatant(channel_id):
     if not state or not state['active']:
         return None
     return state['turn_order'][state['current_turn']]
+
+
+def apply_aoe_damage(channel_id, targets, damage):
+    """Placeholder for area-of-effect damage."""
+    state = load_combat(channel_id)
+    if not state or not state.get('active'):
+        return None
+    for name in targets:
+        target = next((c for c in state['combatants'] if c['name'].lower() == name.lower()), None)
+        if target:
+            target['hp'] = max(0, target.get('hp', 0) - damage)
+            if target['hp'] == 0:
+                target.setdefault('status', []).append('unconscious')
+    save_combat(channel_id, state)
+    return state
+
+
+def apply_status(channel_id, target_name, status):
+    """Placeholder for applying a status condition to a target."""
+    state = load_combat(channel_id)
+    if not state or not state.get('active'):
+        return None
+    target = next((c for c in state['combatants'] if c['name'].lower() == target_name.lower()), None)
+    if not target:
+        return None
+    target.setdefault('status', []).append(status)
+    save_combat(channel_id, state)
+    return state
 
 def end_combat(channel_id):
     path = _get_combat_path(channel_id)

@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DM Dashboard</title>
+</head>
+<body>
+    <h1>DM Dashboard</h1>
+    <ul>
+    {% for s in sessions %}
+        <li><a href="{{ url_for('portal.campaign_summary', session_id=s) }}">Campaign {{ s }}</a></li>
+    {% endfor %}
+    </ul>
+    <p>This dashboard will allow NPC management in future versions.</p>
+</body>
+</html>

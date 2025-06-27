@@ -52,3 +52,18 @@ def roll_check(dice_str, user_id=None, stat=None, advantage=False, disadvantage=
 def get_modifier_string(stat_value):
     mod = (stat_value - 10) // 2
     return f"+{mod}" if mod >= 0 else str(mod)
+
+
+INLINE_ROLL_RE = re.compile(r'\[(\d*d\d+(?:[+-]\d+)?)\]')
+
+
+def extract_inline_rolls(text: str):
+    """Return a dict of inline dice notation to results."""
+    rolls = {}
+    for notation in INLINE_ROLL_RE.findall(text):
+        try:
+            total, _rolls, _ = roll_dice(notation)
+            rolls[notation] = total
+        except Exception:
+            continue
+    return rolls

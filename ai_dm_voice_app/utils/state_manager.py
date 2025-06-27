@@ -21,6 +21,7 @@ DEFAULT_STATE = {
     "difficulty": "normal",
     "turn_order": [],
     "current_turn_index": 0,
+    "auto_advance": False,
 }
 
 def _get_state_path(session_id):

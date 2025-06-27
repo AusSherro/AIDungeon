@@ -10,6 +10,7 @@ ROLL_PATTERN = re.compile(r'roll (?:a |an )?(\d*d\d+|d20)', re.IGNORECASE)
 # Support "DC 15" or "need 15 or higher" styles
 DC_PATTERN = re.compile(r'(?:dc\s*(\d+)|need (\d+) or higher)', re.IGNORECASE)
 LOOT_PATTERN = re.compile(r'you (?:find|found|pick up|obtain|grab) (?:a|an|the)?\s*"?([^"\n]+)"?', re.IGNORECASE)
+XP_PATTERN = re.compile(r"(?:defeated?|killed?|vanquished?)\s+(?:the\s+)?(\w+)", re.I)
 
 def detect_roll_request(text, player_id=None):
     """Return pending_roll dict if the text asks for a dice roll."""
@@ -24,6 +25,22 @@ def detect_roll_request(text, player_id=None):
         if dc_value:
             pending['dc'] = int(dc_value)
     return pending
+
+
+def award_xp_for_victory(text, player_id):
+    """Detect enemy defeat in text and award XP."""
+    match = XP_PATTERN.search(text)
+    if not match or not player_id:
+        return 0
+    enemy = match.group(1).lower()
+    xp_table = {'goblin': 50, 'orc': 100, 'dragon': 1000}
+    xp = xp_table.get(enemy, 25)
+    from utils.character_manager import load_character, set_xp
+    char = load_character(player_id)
+    if char:
+        new_xp = char.get('xp', 0) + xp
+        set_xp(player_id, new_xp)
+    return xp
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are a Dungeon Master AI for a D&D 5e campaign. Respond to player actions with immersive narration and character dialogue. "
@@ -82,6 +99,7 @@ def get_dm_response(user_input, state, player_id=None, system_prompt=None):
     loot_match = LOOT_PATTERN.search(reply)
     if loot_match:
         state.setdefault('recent_loot', []).append(loot_match.group(1).strip())
+    award_xp_for_victory(reply, player_id)
     return reply, state
 
 import json as _json
