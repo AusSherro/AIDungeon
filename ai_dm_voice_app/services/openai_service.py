@@ -151,7 +151,18 @@ def generate_campaign(state, prompt=None):
         "prompt_history": [],
     })
 
-    return data.get("intro", campaign_text), state
+    formatted = (
+        "=== NEW CAMPAIGN CREATED ===\n"
+        f"Title: {state['campaign_title']}\n"
+        f"Realm: {state['realm']}\n"
+        f"Starting Location: {state['location']}\n\n"
+        "[Plot Hook]\n"
+        f"{state['plot_hook']}\n\n"
+        "[Introduction]\n"
+        f"{data.get('intro', campaign_text)}"
+    )
+
+    return formatted, state
 
 
 def summarize_history(state, max_entries=10):
