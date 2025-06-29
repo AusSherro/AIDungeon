@@ -408,7 +408,7 @@ async def new_campaign(interaction: discord.Interaction, prompt: str = ""):
     first_player_id = turn_order[0]
     first_player_mention = f"<@{first_player_id}>"
     await interaction.followup.send(
-        f"**New Campaign - {state.get('campaign_title','')}**\n{campaign_text}\n\n{first_player_mention}, it's your turn. What do you do?"
+        f"{campaign_text}\n\n{first_player_mention}, it's your turn. What do you do?"
     )
     
     # Play audio if possible
@@ -520,7 +520,6 @@ async def act(interaction: discord.Interaction, action: str):
     await interaction.followup.send(output)
     for item in loot_items:
         add_inventory(current_player_id, item)
-        await interaction.followup.send(f"🧳 {interaction.user.display_name} picks up a '{item}' → Added to inventory")
 
     if state.get("auto_advance"):
         idx = get_current_turn_index(updated_state)
@@ -599,7 +598,7 @@ async def start_adventure(interaction: discord.Interaction, prompt: str = ""):
         print(f"TTS Error: {e}")
         audio_bytes = None
     
-    await interaction.followup.send(f"**New Adventure:**\n{campaign_text}")
+    await interaction.followup.send(campaign_text)
     log_message(channel_id, "DM", f"New adventure started: {campaign_text}")
     
     # Play audio if possible
