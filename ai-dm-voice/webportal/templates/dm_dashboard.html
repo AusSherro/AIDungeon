@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}DM Dashboard - AI Dungeon Master{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h1>🎭 Dungeon Master Dashboard</h1>
+    </div>
+    
+    {% if sessions %}
+    <div class="grid grid-2">
+        {% for s in sessions %}
+        <a href="{{ url_for('portal.campaign_summary', session_id=s.id) }}" class="character-card">
+            <div class="character-avatar">📜</div>
+            <div class="character-info">
+                <h3>{{ s.title or 'Untitled Campaign' }}</h3>
+                <p>
+                    {% if s.realm %}<span class="tag tag-race">{{ s.realm }}</span>{% endif %}
+                    <span class="tag tag-level">{{ s.player_count }} players</span>
+                </p>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <h3>No campaigns yet!</h3>
+        <p>Start a campaign in Discord with <code>/campaign</code></p>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>📋 Quick Links</h2>
+    <br>
+    <div class="grid grid-3">
+        <a href="{{ url_for('portal.list_characters') }}" class="btn btn-secondary" style="text-align: center;">
+            🧙 View Characters
+        </a>
+        <a href="{{ url_for('portal.create_character') }}" class="btn btn-primary" style="text-align: center;">
+            ✨ Create Character
+        </a>
+        <a href="#" class="btn btn-secondary" style="text-align: center; opacity: 0.5;">
+            📖 View Logs (Coming Soon)
+        </a>
+    </div>
+</div>
+{% endblock %}

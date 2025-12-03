@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+
+{% block title %}Create Character - AI Dungeon Master{% endblock %}
+
+{% block content %}
+<form method="POST" action="{{ url_for('portal.create_character_submit') }}">
+    <div class="card">
+        <div class="card-header">
+            <h1>✨ Create New Character</h1>
+        </div>
+        
+        <!-- Basic Info -->
+        <div class="grid grid-3">
+            <div class="form-group">
+                <label for="name">Character Name *</label>
+                <input type="text" id="name" name="name" placeholder="Gandalf the Grey" required>
+            </div>
+            <div class="form-group">
+                <label for="race">Race</label>
+                <select id="race" name="race">
+                    {% for r in ['Human', 'Elf', 'Dwarf', 'Halfling', 'Dragonborn', 'Gnome', 'Half-Elf', 'Half-Orc', 'Tiefling'] %}
+                    <option value="{{ r }}">{{ r }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="char_class">Class</label>
+                <select id="char_class" name="char_class">
+                    {% for c in ['Fighter', 'Wizard', 'Rogue', 'Cleric', 'Ranger', 'Barbarian', 'Bard', 'Druid', 'Monk', 'Paladin', 'Sorcerer', 'Warlock'] %}
+                    <option value="{{ c }}">{{ c }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label for="discord_id">Discord User ID (optional)</label>
+            <input type="text" id="discord_id" name="discord_id" placeholder="123456789012345678">
+            <small style="color: var(--text-secondary);">
+                Your Discord ID links this character to your Discord account. 
+                Right-click your name in Discord → Copy ID (Developer Mode must be enabled).
+            </small>
+        </div>
+    </div>
+    
+    <!-- Ability Scores -->
+    <div class="card">
+        <h2>⚔️ Ability Scores</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 20px;">
+            Use the standard array (15, 14, 13, 12, 10, 8) or roll your own!
+        </p>
+        
+        <div class="grid grid-6">
+            {% for stat, default in [('STR', 10), ('DEX', 10), ('CON', 10), ('INT', 10), ('WIS', 10), ('CHA', 10)] %}
+            <div class="form-group">
+                <label for="{{ stat }}">{{ stat }}</label>
+                <input type="number" id="{{ stat }}" name="{{ stat }}" 
+                       value="{{ default }}" min="1" max="30" 
+                       style="text-align: center; font-size: 1.2rem;">
+            </div>
+            {% endfor %}
+        </div>
+        
+        <div style="text-align: center; margin-top: 15px;">
+            <button type="button" onclick="rollStats()" class="btn btn-secondary">🎲 Roll Stats (4d6 drop lowest)</button>
+            <button type="button" onclick="standardArray()" class="btn btn-secondary">📋 Use Standard Array</button>
+        </div>
+    </div>
+    
+    <!-- Starting Equipment -->
+    <div class="card">
+        <h2>🎒 Starting Equipment</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 20px;">Enter items separated by commas</p>
+        
+        <div class="form-group">
+            <label for="inventory">Items</label>
+            <textarea id="inventory" name="inventory" rows="3" 
+                      placeholder="Longsword, Chain mail, Shield, Explorer's pack, 10 gold pieces"></textarea>
+        </div>
+    </div>
+    
+    <!-- Submit -->
+    <div style="display: flex; justify-content: space-between; margin-top: 20px;">
+        <a href="{{ url_for('portal.list_characters') }}" class="btn btn-secondary">Cancel</a>
+        <button type="submit" class="btn btn-primary" style="font-size: 1.1rem; padding: 12px 30px;">
+            ✨ Create Character
+        </button>
+    </div>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function rollStats() {
+    const stats = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'];
+    stats.forEach(stat => {
+        // Roll 4d6, drop lowest
+        let rolls = [];
+        for (let i = 0; i < 4; i++) {
+            rolls.push(Math.floor(Math.random() * 6) + 1);
+        }
+        rolls.sort((a, b) => b - a);
+        const total = rolls[0] + rolls[1] + rolls[2];
+        document.getElementById(stat).value = total;
+    });
+}
+
+function standardArray() {
+    const stats = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'];
+    const array = [15, 14, 13, 12, 10, 8];
+    stats.forEach((stat, i) => {
+        document.getElementById(stat).value = array[i];
+    });
+}
+</script>
+{% endblock %}

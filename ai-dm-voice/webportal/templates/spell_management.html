@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Spells - {{ char.name }}{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <div>
+            <h1>✨ Manage Spells</h1>
+            <p>{{ char.name }} - {{ char.class }}</p>
+        </div>
+        <a href="{{ url_for('portal.character_detail', char_id=char_id) }}" class="btn btn-secondary">← Back to Character</a>
+    </div>
+</div>
+
+<!-- Current Spell Status -->
+<div class="card">
+    <h2>📊 Current Status</h2>
+    <br>
+    <div class="grid grid-3">
+        <div class="stat-box">
+            <div class="stat-name">Cantrips Known</div>
+            <div class="stat-value">{{ char.cantrips_known|length if char.cantrips_known else 0 }}</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-name">Spells Known</div>
+            <div class="stat-value">{{ char.spells_known|length if char.spells_known else 0 }}</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-name">Spells Prepared</div>
+            <div class="stat-value">{{ char.prepared_spells|length if char.prepared_spells else 0 }}</div>
+        </div>
+    </div>
+    
+    <!-- Show spell slots -->
+    {% if char.spell_slots %}
+    <div class="form-group" style="margin-top: 20px;">
+        <label>Spell Slots</label>
+        <div class="spell-slots-grid">
+            {% for level in range(1, 10) %}
+            {% set total = char.spell_slots.get(level|string, 0) %}
+            {% if total > 0 %}
+            <div class="spell-slot-level">
+                <div class="spell-slot-label">Level {{ level }}</div>
+                <div class="spell-slot-count">{{ total }} slots</div>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Known Cantrips -->
+<div class="card">
+    <div class="card-header">
+        <h2>🔮 Cantrips</h2>
+    </div>
+    
+    {% if char.cantrips_known and char.cantrips_known|length > 0 %}
+    <div class="form-group">
+        <label>Known Cantrips</label>
+        <div class="spell-list">
+            {% for cantrip in char.cantrips_known %}
+            <div class="spell-item">
+                <span class="spell-tag cantrip">{{ cantrip }}</span>
+                <form method="POST" action="{{ url_for('portal.forget_spell_route', char_id=char_id) }}" style="display:inline;">
+                    <input type="hidden" name="spell_name" value="{{ cantrip }}">
+                    <input type="hidden" name="is_cantrip" value="true">
+                    <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Forget {{ cantrip }}?')">✕</button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    
+    <div class="form-group">
+        <label>Learn New Cantrip</label>
+        <div class="spell-grid">
+            {% for spell in available_cantrips %}
+            {% if not spell.cantrip_known %}
+            <div class="spell-card">
+                <div class="spell-name">{{ spell.name }}</div>
+                <div class="spell-school">{{ spell.school }}</div>
+                <form method="POST" action="{{ url_for('portal.learn_spell_route', char_id=char_id) }}">
+                    <input type="hidden" name="spell_name" value="{{ spell.name }}">
+                    <input type="hidden" name="is_cantrip" value="true">
+                    <button type="submit" class="btn btn-sm btn-primary">Learn</button>
+                </form>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- Known Spells -->
+<div class="card">
+    <div class="card-header">
+        <h2>📖 Known Spells</h2>
+    </div>
+    
+    {% if char.spells_known and char.spells_known|length > 0 %}
+    <div class="form-group">
+        <label>Currently Known</label>
+        <div class="spell-list">
+            {% for spell in char.spells_known %}
+            <div class="spell-item">
+                <span class="spell-tag known">{{ spell }}</span>
+                {% if spell in char.prepared_spells %}
+                <span class="spell-tag prepared">Prepared</span>
+                <form method="POST" action="{{ url_for('portal.prepare_spell_route', char_id=char_id) }}" style="display:inline;">
+                    <input type="hidden" name="spell_name" value="{{ spell }}">
+                    <input type="hidden" name="action" value="unprepare">
+                    <button type="submit" class="btn btn-sm btn-secondary">Unprepare</button>
+                </form>
+                {% else %}
+                <form method="POST" action="{{ url_for('portal.prepare_spell_route', char_id=char_id) }}" style="display:inline;">
+                    <input type="hidden" name="spell_name" value="{{ spell }}">
+                    <input type="hidden" name="action" value="prepare">
+                    <button type="submit" class="btn btn-sm btn-primary">Prepare</button>
+                </form>
+                {% endif %}
+                <form method="POST" action="{{ url_for('portal.forget_spell_route', char_id=char_id) }}" style="display:inline;">
+                    <input type="hidden" name="spell_name" value="{{ spell }}">
+                    <input type="hidden" name="is_cantrip" value="false">
+                    <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Forget {{ spell }}?')">✕</button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    
+    <div class="form-group">
+        <label>Learn New Spell</label>
+        {% for level in range(1, 10) %}
+        {% set level_spells = available_spells|selectattr('level', 'equalto', level)|list %}
+        {% if level_spells|length > 0 %}
+        <details class="spell-level-group">
+            <summary>Level {{ level }} Spells</summary>
+            <div class="spell-grid">
+                {% for spell in level_spells %}
+                {% if not spell.known %}
+                <div class="spell-card">
+                    <div class="spell-name">{{ spell.name }}</div>
+                    <div class="spell-info">
+                        <span class="spell-school">{{ spell.school }}</span>
+                        {% if spell.ritual %}<span class="spell-badge ritual">R</span>{% endif %}
+                        {% if spell.concentration %}<span class="spell-badge concentration">C</span>{% endif %}
+                    </div>
+                    <form method="POST" action="{{ url_for('portal.learn_spell_route', char_id=char_id) }}">
+                        <input type="hidden" name="spell_name" value="{{ spell.name }}">
+                        <input type="hidden" name="is_cantrip" value="false">
+                        <button type="submit" class="btn btn-sm btn-primary">Learn</button>
+                    </form>
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+        </details>
+        {% endif %}
+        {% endfor %}
+    </div>
+</div>
+
+<br>
+<a href="{{ url_for('portal.character_detail', char_id=char_id) }}" class="btn btn-secondary">← Back to Character</a>
+{% endblock %}
