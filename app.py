@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file, make_response
+from flask import Flask, request, jsonify, send_file, make_response, redirect
 from services.openai_service import get_dm_response
 from services.elevenlabs_service import text_to_speech
 from utils.voice_parser import extract_voice_tag, clean_text
@@ -21,6 +21,18 @@ try:
     app.register_blueprint(portal_bp, url_prefix='/portal')
 except Exception as e:
     print(f"Failed to register portal blueprint: {e}")
+
+
+@app.route('/')
+def index():
+    """Redirect root to the web portal."""
+    return redirect('/portal/')
+
+
+@app.route('/favicon.ico')
+def favicon():
+    """Return empty response for favicon to prevent 404 spam."""
+    return '', 204
 
 @app.route('/dm', methods=['POST'])
 def dm():
