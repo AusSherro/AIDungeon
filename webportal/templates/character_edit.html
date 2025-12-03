@@ -1,11 +1,137 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Edit {{ char.name }}</title>
-</head>
-<body>
-    <h1>Edit {{ char.name }}</h1>
-    <p>This page will allow character editing in a future release.</p>
-    <p><a href="{{ url_for('portal.character_detail', char_id=char_id) }}">Back</a></p>
-</body>
-</html>
+{% extends "base.html" %}
+
+{% block title %}Edit {{ char.name }} - AI Dungeon Master{% endblock %}
+
+{% block content %}
+<form method="POST" action="{{ url_for('portal.save_character_route', char_id=char_id) }}">
+    <div class="card">
+        <div class="card-header">
+            <h1>✏️ Edit {{ char.name }}</h1>
+            <div>
+                <a href="{{ url_for('portal.character_detail', char_id=char_id) }}" class="btn btn-secondary">Cancel</a>
+                <button type="submit" class="btn btn-primary">💾 Save Changes</button>
+            </div>
+        </div>
+        
+        <!-- Basic Info -->
+        <div class="grid grid-3">
+            <div class="form-group">
+                <label for="name">Character Name</label>
+                <input type="text" id="name" name="name" value="{{ char.name or '' }}" required>
+            </div>
+            <div class="form-group">
+                <label for="race">Race</label>
+                <select id="race" name="race">
+                    {% for r in ['Human', 'Elf', 'Dwarf', 'Halfling', 'Dragonborn', 'Gnome', 'Half-Elf', 'Half-Orc', 'Tiefling'] %}
+                    <option value="{{ r }}" {% if char.race == r %}selected{% endif %}>{{ r }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="char_class">Class</label>
+                <select id="char_class" name="char_class">
+                    {% for c in ['Barbarian', 'Bard', 'Cleric', 'Druid', 'Fighter', 'Monk', 'Paladin', 'Ranger', 'Rogue', 'Sorcerer', 'Warlock', 'Wizard'] %}
+                    <option value="{{ c }}" {% if char.class == c %}selected{% endif %}>{{ c }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        
+        <div class="grid grid-3">
+            <div class="form-group">
+                <label for="level">Level</label>
+                <input type="number" id="level" name="level" value="{{ char.level or 1 }}" min="1" max="20">
+            </div>
+            <div class="form-group">
+                <label for="hp">Current HP</label>
+                <input type="number" id="hp" name="hp" value="{{ char.hp or 10 }}" min="0">
+            </div>
+            <div class="form-group">
+                <label for="max_hp">Max HP</label>
+                <input type="number" id="max_hp" name="max_hp" value="{{ char.max_hp or 10 }}" min="1">
+            </div>
+        </div>
+    </div>
+    
+    <!-- Ability Scores -->
+    <div class="card">
+        <h2>⚔️ Ability Scores</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 20px;">Standard array: 15, 14, 13, 12, 10, 8</p>
+        
+        <div class="grid grid-6">
+            {% for stat in ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'] %}
+            <div class="form-group">
+                <label for="{{ stat }}">{{ stat }}</label>
+                <input type="number" id="{{ stat }}" name="{{ stat }}" 
+                       value="{{ char.get(stat, 10) }}" min="1" max="30" 
+                       style="text-align: center; font-size: 1.2rem;">
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    
+    <!-- Combat Stats -->
+    <div class="card">
+        <h2>🛡️ Combat Stats</h2>
+        <br>
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label for="ac">Armor Class</label>
+                <input type="number" id="ac" name="ac" value="{{ char.ac or 10 }}" min="1">
+            </div>
+            <div class="form-group">
+                <label for="xp">Experience Points</label>
+                <input type="number" id="xp" name="xp" value="{{ char.xp or 0 }}" min="0">
+            </div>
+        </div>
+    </div>
+    
+    <!-- Inventory -->
+    <div class="card">
+        <h2>🎒 Inventory</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 20px;">Enter items separated by commas</p>
+        
+        <div class="form-group">
+            <label for="inventory">Items</label>
+            <textarea id="inventory" name="inventory" rows="4" 
+                      placeholder="Longsword, Shield, Backpack, 50 gold pieces">{{ char.inventory | join(', ') if char.inventory else '' }}</textarea>
+        </div>
+    </div>
+    
+    <!-- Proficiencies -->
+    <div class="card">
+        <h2>📜 Proficiencies</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 20px;">Check skills your character is proficient in</p>
+        
+        <div class="grid grid-3">
+            {% set all_skills = [
+                ('acrobatics', 'DEX'), ('animal_handling', 'WIS'), ('arcana', 'INT'),
+                ('athletics', 'STR'), ('deception', 'CHA'), ('history', 'INT'),
+                ('insight', 'WIS'), ('intimidation', 'CHA'), ('investigation', 'INT'),
+                ('medicine', 'WIS'), ('nature', 'INT'), ('perception', 'WIS'),
+                ('performance', 'CHA'), ('persuasion', 'CHA'), ('religion', 'INT'),
+                ('sleight_of_hand', 'DEX'), ('stealth', 'DEX'), ('survival', 'WIS')
+            ] %}
+            
+            {% for skill, ability in all_skills %}
+            <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                <input type="checkbox" id="prof_{{ skill }}" name="proficiencies" value="{{ skill }}"
+                       {% if skill in (char.proficiencies or []) %}checked{% endif %}
+                       style="width: auto; margin-right: 10px;">
+                <label for="prof_{{ skill }}" style="margin-bottom: 0;">
+                    {{ skill | replace('_', ' ') | title }} ({{ ability }})
+                </label>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    
+    <!-- Save Button -->
+    <div style="display: flex; justify-content: space-between; margin-top: 20px;">
+        <a href="{{ url_for('portal.character_detail', char_id=char_id) }}" class="btn btn-secondary">Cancel</a>
+        <button type="submit" class="btn btn-primary" style="font-size: 1.1rem; padding: 12px 30px;">
+            💾 Save Character
+        </button>
+    </div>
+</form>
+{% endblock %}

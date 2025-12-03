@@ -17,7 +17,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from config import Config
 
-from services.openai_service import get_dm_response, generate_campaign, summarize_history
+from services.openai_service import get_dm_response, generate_campaign, summarize_history, generate_campaign_summary, extract_npcs_and_quests
 from services.elevenlabs_service import text_to_speech_async
 from utils.voice_parser import extract_voice_tag, clean_text, clean_for_tts
 from utils.voice_map import get_voice_id
@@ -29,6 +29,11 @@ from utils.state_manager import (
     set_turn_order,
     get_current_turn_index,
     set_current_turn_index,
+    get_context_summary,
+    update_campaign_summary,
+    add_key_event,
+    add_or_update_npc,
+    add_quest,
 )
 from utils.prompt_builder import build_system_prompt
 from utils.dice_roller import roll_dice, extract_inline_rolls
@@ -325,6 +330,131 @@ async def recap(interaction: discord.Interaction):
     await interaction.response.defer()
     summary = summarize_history(state)
     await interaction.followup.send(f"📖 **Previously...**\n\n{summary}")
+
+
+@bot.tree.command(name="context", description="Show what the AI remembers about your campaign")
+async def context_cmd(interaction: discord.Interaction):
+    """Display the campaign context/memory."""
+    channel_id = str(interaction.channel.id)
+    state = load_state(channel_id)
+    
+    if not state.get("campaign_title"):
+        await interaction.response.send_message("No campaign running. Use `/campaign` to start one!")
+        return
+    
+    context = get_context_summary(state)
+    history_count = len(state.get("prompt_history", []))
+    
+    output = (
+        f"# 🧠 Campaign Memory\n\n"
+        f"{context}\n\n"
+        f"───────────────────────\n"
+        f"*Recent history: {history_count}/10 messages*\n"
+        f"*Use `/summarize` to save important events to long-term memory*"
+    )
+    
+    await interaction.response.send_message(output)
+
+
+@bot.tree.command(name="summarize", description="Save current events to campaign memory")
+async def summarize_cmd(interaction: discord.Interaction):
+    """Generate and save a campaign summary to preserve important events."""
+    channel_id = str(interaction.channel.id)
+    state = load_state(channel_id)
+    
+    if not state.get("campaign_title"):
+        await interaction.response.send_message("No campaign running.")
+        return
+    
+    history = state.get("prompt_history", [])
+    if len(history) < 2:
+        await interaction.response.send_message("Not enough history to summarize yet. Play more first!", ephemeral=True)
+        return
+    
+    await interaction.response.defer()
+    
+    # Generate new summary
+    new_summary = generate_campaign_summary(state)
+    update_campaign_summary(state, new_summary)
+    
+    # Also extract NPCs and quests from recent history
+    recent_text = "\n".join([m.get("content", "") for m in history])
+    extracted = extract_npcs_and_quests(state, recent_text)
+    
+    # Add extracted NPCs
+    for npc in extracted.get("npcs", []):
+        add_or_update_npc(state, npc["name"], npc.get("description", ""), npc.get("status", "alive"))
+    
+    # Add extracted quests
+    for quest in extracted.get("quests", []):
+        add_quest(state, quest["name"], quest.get("description", ""), quest.get("status", "active"))
+    
+    save_state(channel_id, state)
+    
+    # Show what was saved
+    npc_names = [n["name"] for n in extracted.get("npcs", [])]
+    quest_names = [q["name"] for q in extracted.get("quests", [])]
+    
+    output = f"📝 **Campaign memory updated!**\n\n**Summary:**\n{new_summary}"
+    if npc_names:
+        output += f"\n\n**NPCs remembered:** {', '.join(npc_names)}"
+    if quest_names:
+        output += f"\n\n**Quests tracked:** {', '.join(quest_names)}"
+    
+    await interaction.followup.send(output)
+
+
+@bot.tree.command(name="remember", description="Add a note to campaign memory")
+@app_commands.describe(
+    note="Important event or detail to remember",
+    npc="Add an NPC (format: Name - Description)",
+    quest="Add a quest (format: Quest Name - Description)"
+)
+async def remember_cmd(
+    interaction: discord.Interaction,
+    note: Optional[str] = None,
+    npc: Optional[str] = None,
+    quest: Optional[str] = None
+):
+    """Manually add something to campaign memory."""
+    channel_id = str(interaction.channel.id)
+    state = load_state(channel_id)
+    
+    if not state.get("campaign_title"):
+        await interaction.response.send_message("No campaign running.")
+        return
+    
+    messages = []
+    
+    if note:
+        add_key_event(state, note)
+        messages.append(f"📌 Added event: *{note}*")
+    
+    if npc:
+        parts = npc.split(" - ", 1)
+        name = parts[0].strip()
+        desc = parts[1].strip() if len(parts) > 1 else ""
+        add_or_update_npc(state, name, desc)
+        messages.append(f"👤 Added NPC: **{name}**")
+    
+    if quest:
+        parts = quest.split(" - ", 1)
+        name = parts[0].strip()
+        desc = parts[1].strip() if len(parts) > 1 else ""
+        add_quest(state, name, desc)
+        messages.append(f"📜 Added quest: **{name}**")
+    
+    if messages:
+        save_state(channel_id, state)
+        await interaction.response.send_message("\n".join(messages))
+    else:
+        await interaction.response.send_message(
+            "Add something to remember:\n"
+            "• `note:` An important event\n"
+            "• `npc:` Name - Description\n"
+            "• `quest:` Quest Name - Description",
+            ephemeral=True
+        )
 
 
 # =============================================================================
@@ -1006,12 +1136,16 @@ async def help_cmd(interaction: discord.Interaction):
 • `/deathsave` - Roll death saving throw
 • `/endcombat` - End combat
 
-**Campaign:**
+**Campaign Memory:**
 • `/status` - View party info
 • `/recap` - AI summary of recent events
+• `/context` - See what the AI remembers
+• `/summarize` - Save events to long-term memory
+• `/remember` - Manually add notes/NPCs/quests
 
 **Settings:**
 • `/voice` - Toggle TTS on/off
+• `/turns` - Toggle free-form vs strict turns
 • `/leave` - Disconnect from voice
 """
     await interaction.response.send_message(help_text)

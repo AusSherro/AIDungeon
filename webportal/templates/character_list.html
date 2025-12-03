@@ -1,14 +1,37 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Character List</title>
-</head>
-<body>
-    <h1>Character List</h1>
-    <ul>
-    {% for c in characters %}
-        <li><a href="{{ url_for('portal.character_detail', char_id=c.id) }}">{{ c.name }}</a></li>
-    {% endfor %}
-    </ul>
-</body>
-</html>
+{% extends "base.html" %}
+
+{% block title %}Characters - AI Dungeon Master{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h1>🧙 Your Characters</h1>
+        <a href="{{ url_for('portal.create_character') }}" class="btn btn-primary">+ Create Character</a>
+    </div>
+    
+    {% if characters %}
+    <div class="grid grid-2">
+        {% for c in characters %}
+        <a href="{{ url_for('portal.character_detail', char_id=c.id) }}" class="character-card">
+            <div class="character-avatar">{{ c.name[0] | upper }}</div>
+            <div class="character-info">
+                <h3>{{ c.name }}</h3>
+                <p>
+                    {% if c.race %}<span class="tag tag-race">{{ c.race }}</span>{% endif %}
+                    {% if c.char_class %}<span class="tag tag-class">{{ c.char_class }}</span>{% endif %}
+                    {% if c.level %}<span class="tag tag-level">Level {{ c.level }}</span>{% endif %}
+                </p>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <h3>No characters yet!</h3>
+        <p>Create your first character to start your adventure.</p>
+        <br>
+        <a href="{{ url_for('portal.create_character') }}" class="btn btn-primary">Create Character</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

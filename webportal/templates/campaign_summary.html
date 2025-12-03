@@ -1,11 +1,109 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Campaign {{ session_id }}</title>
-</head>
-<body>
-    <h1>Campaign Summary</h1>
-    <pre>{{ state | tojson(indent=2) }}</pre>
-    <p><a href="{{ url_for('portal.list_characters') }}">Characters</a></p>
-</body>
-</html>
+{% extends "base.html" %}
+
+{% block title %}{{ state.campaign_title or 'Campaign' }} - AI Dungeon Master{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <div>
+            <h1>📜 {{ state.campaign_title or 'Untitled Campaign' }}</h1>
+            <p style="color: var(--text-secondary);">
+                {{ state.realm or 'Unknown Realm' }} • {{ state.location or 'Unknown Location' }}
+            </p>
+        </div>
+    </div>
+    
+    {% if state.plot_hook %}
+    <div style="background: var(--bg-input); padding: 15px; border-radius: 8px; border-left: 3px solid var(--accent-gold);">
+        <strong>Plot Hook:</strong> {{ state.plot_hook }}
+    </div>
+    {% endif %}
+</div>
+
+<!-- Campaign Memory -->
+<div class="card">
+    <h2>🧠 Campaign Memory</h2>
+    <br>
+    {% if context and context != "No campaign context yet." %}
+    <div style="white-space: pre-wrap; line-height: 1.8;">{{ context }}</div>
+    {% else %}
+    <div class="empty-state" style="padding: 20px;">
+        <p>No campaign memory saved yet. Use <code>/summarize</code> in Discord to save important events.</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- NPCs -->
+{% if state.key_npcs %}
+<div class="card">
+    <h2>👤 Key NPCs</h2>
+    <br>
+    <div class="grid grid-2">
+        {% for npc in state.key_npcs %}
+        <div class="stat-box" style="text-align: left;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <strong>{{ npc.name }}</strong>
+                <span class="tag {% if npc.status == 'dead' %}tag-class{% else %}tag-race{% endif %}">
+                    {{ npc.status or 'alive' }}
+                </span>
+            </div>
+            <p style="color: var(--text-secondary); margin-top: 5px;">{{ npc.description }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Quests -->
+{% if state.quests %}
+<div class="card">
+    <h2>📋 Quests</h2>
+    <br>
+    {% for quest in state.quests %}
+    <div style="background: var(--bg-input); padding: 15px; border-radius: 8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+            <strong>{{ quest.name }}</strong>
+            <p style="color: var(--text-secondary);">{{ quest.description }}</p>
+        </div>
+        <span class="tag {% if quest.status == 'completed' %}tag-race{% elif quest.status == 'failed' %}tag-class{% else %}tag-level{% endif %}">
+            {{ quest.status or 'active' }}
+        </span>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- Party -->
+{% if state.players %}
+<div class="card">
+    <h2>⚔️ Party Members</h2>
+    <br>
+    <div class="grid grid-3">
+        {% for player_id in state.players %}
+        <div class="stat-box">
+            <div class="stat-value" style="font-size: 1.2rem;">Player</div>
+            <div class="stat-name">ID: {{ player_id }}</div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Key Events -->
+{% if state.key_events %}
+<div class="card">
+    <h2>📖 Key Events</h2>
+    <br>
+    <ul style="list-style: none;">
+        {% for event in state.key_events %}
+        <li style="padding: 10px 0; border-bottom: 1px solid var(--border-color);">
+            📌 {{ event }}
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<br>
+<a href="{{ url_for('portal.dm_dashboard') }}" class="btn btn-secondary">← Back to Dashboard</a>
+{% endblock %}

@@ -74,7 +74,11 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 def get_dm_response(user_input, state, player_id=None, system_prompt=None):
-    messages = state.get('prompt_history', [])
+    from utils.state_manager import get_prompt_context_for_ai
+    
+    # Get context including campaign summary + recent history
+    messages = get_prompt_context_for_ai(state)
+    
     # Add character and combat state context
     char_state = state.get('characters', {})
     combat_state = state.get('combat', {})
@@ -99,10 +103,15 @@ def get_dm_response(user_input, state, player_id=None, system_prompt=None):
         print(f"OpenAI API Error: {e}")
         reply = "The mystical energies are disrupted... please try again."
     
-    # Update state
-    state['prompt_history'] = messages + [{"role": "assistant", "content": reply}]
-    if len(state['prompt_history']) > 10:
-        state['prompt_history'] = state['prompt_history'][-10:]
+    # Update prompt history (just the recent conversation, summary is separate)
+    history = state.get('prompt_history', [])
+    history.append({"role": "user", "content": user_input})
+    history.append({"role": "assistant", "content": reply})
+    # Keep rolling window of 10 recent exchanges
+    if len(history) > 10:
+        state['prompt_history'] = history[-10:]
+    else:
+        state['prompt_history'] = history
     
     # Check if AI is asking for a skill check
     skill_check = detect_skill_check(reply)
@@ -231,3 +240,106 @@ def summarize_history(state, max_entries=10):
     except Exception as e:
         print(f"OpenAI Recap Error: {e}")
         return "Previously on your adventure..."
+
+
+def generate_campaign_summary(state):
+    """
+    Generate a comprehensive summary of the campaign so far.
+    This is used to condense the prompt history into long-term memory.
+    """
+    from utils.state_manager import get_context_summary
+    
+    current_context = get_context_summary(state)
+    history = state.get("prompt_history", [])
+    
+    if not history:
+        return state.get("campaign_summary", "")
+    
+    system_prompt = """You are a D&D campaign chronicler. Your job is to update the campaign summary with new events.
+
+You will receive:
+1. The existing campaign summary (if any)
+2. Recent conversation history
+
+Create an UPDATED summary that:
+- Preserves important past events from the existing summary
+- Adds significant new developments from recent history
+- Notes any major NPC interactions, discoveries, or plot developments
+- Keeps it concise (2-3 paragraphs max)
+- Writes in past tense, as a historical record
+- Focuses on WHAT HAPPENED, not dialogue
+
+Do NOT include:
+- Moment-to-moment details
+- Exact dice rolls or mechanics
+- Things the party discussed but didn't act on
+
+Return ONLY the updated summary text, no other formatting."""
+
+    messages = [
+        {"role": "system", "content": system_prompt}
+    ]
+    
+    if current_context:
+        messages.append({"role": "user", "content": f"EXISTING CAMPAIGN CONTEXT:\n{current_context}"})
+    
+    if history:
+        messages.append({"role": "user", "content": f"RECENT EVENTS:\n{_json.dumps(history, indent=2)}"})
+    
+    messages.append({"role": "user", "content": "Generate the updated campaign summary."})
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            max_tokens=400,
+            temperature=0.7,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"OpenAI Summary Error: {e}")
+        return state.get("campaign_summary", "")
+
+
+def extract_npcs_and_quests(state, recent_response):
+    """
+    Analyze recent AI response to extract NPCs and quests to remember.
+    Returns dict with 'npcs' and 'quests' lists.
+    """
+    system_prompt = """Analyze this D&D session text and extract:
+
+1. NPCs mentioned (name, brief description, status - alive/dead/unknown)
+2. Quests mentioned (name, description, status - active/completed/failed)
+
+Return valid JSON:
+{
+    "npcs": [{"name": "Name", "description": "Brief desc", "status": "alive"}],
+    "quests": [{"name": "Quest Name", "description": "Brief desc", "status": "active"}]
+}
+
+Only include NAMED characters (not "the guard" or "some villagers").
+Only include explicit quests/missions, not casual conversations.
+Return empty arrays if nothing notable found."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": recent_response}
+            ],
+            max_tokens=300,
+            temperature=0.3,
+        )
+        raw = response.choices[0].message.content
+        
+        # Parse JSON
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0]
+        elif "```" in raw:
+            raw = raw.split("```")[1].split("```")[0]
+        
+        return _json.loads(raw.strip())
+    except Exception as e:
+        print(f"NPC/Quest extraction error: {e}")
+        return {"npcs": [], "quests": []}

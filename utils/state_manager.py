@@ -17,15 +17,19 @@ DEFAULT_STATE = {
     "plot_hook": "",
     "location": "",
     "players": [],
-    "prompt_history": [],
+    "prompt_history": [],       # Recent conversation (rolling window)
+    "campaign_summary": "",     # AI-generated summary of major events
+    "key_npcs": [],             # Important NPCs: [{name, description, status}]
+    "key_events": [],           # Major plot points
+    "quests": [],               # Active/completed quests
     "difficulty": "normal",
     "turn_order": [],
     "current_turn_index": 0,
     "auto_advance": False,
     "tts_enabled": True,
-    "pending_roll": None,  # {player_id, skill, dc, action} - waiting for a roll
+    "pending_roll": None,       # {player_id, skill, dc, action} - waiting for a roll
     "in_combat": False,
-    "free_form": True,  # If True, anyone can act. If False, strict turn order
+    "free_form": True,          # If True, anyone can act. If False, strict turn order
 }
 
 def _get_state_path(session_id):
@@ -107,4 +111,116 @@ def get_current_turn_index(state):
 
 def set_current_turn_index(state, idx):
     state['current_turn_index'] = idx
+
+
+# ============ CONTEXT MANAGEMENT ============
+
+def get_context_summary(state: dict) -> str:
+    """Build a comprehensive context summary for the AI to remember."""
+    lines = []
+    
+    # Campaign basics
+    if state.get("campaign_title"):
+        lines.append(f"**Campaign:** {state['campaign_title']}")
+    if state.get("realm"):
+        lines.append(f"**Realm:** {state['realm']}")
+    if state.get("location"):
+        lines.append(f"**Current Location:** {state['location']}")
+    
+    # Campaign summary (the important long-term memory)
+    if state.get("campaign_summary"):
+        lines.append(f"\n**Story So Far:**\n{state['campaign_summary']}")
+    
+    # Key NPCs
+    npcs = state.get("key_npcs", [])
+    if npcs:
+        lines.append("\n**Key NPCs:**")
+        for npc in npcs:
+            status = f" ({npc.get('status', 'alive')})" if npc.get('status') else ""
+            lines.append(f"- {npc.get('name', 'Unknown')}: {npc.get('description', '')}{status}")
+    
+    # Active quests
+    quests = state.get("quests", [])
+    active_quests = [q for q in quests if q.get("status") == "active"]
+    if active_quests:
+        lines.append("\n**Active Quests:**")
+        for q in active_quests:
+            lines.append(f"- {q.get('name', 'Unknown')}: {q.get('description', '')}")
+    
+    # Key events
+    events = state.get("key_events", [])
+    if events:
+        lines.append("\n**Major Events:**")
+        for event in events[-5:]:  # Last 5 major events
+            lines.append(f"- {event}")
+    
+    # Players in the party
+    players = state.get("players", [])
+    if players:
+        lines.append(f"\n**Party Members:** {', '.join(players)}")
+    
+    return "\n".join(lines) if lines else "No campaign context yet."
+
+
+def update_campaign_summary(state: dict, new_summary: str):
+    """Update the campaign summary with new events."""
+    state["campaign_summary"] = new_summary
+
+
+def add_key_event(state: dict, event: str):
+    """Add a major plot point to the key events list."""
+    events = state.setdefault("key_events", [])
+    events.append(event)
+    # Keep last 20 major events
+    if len(events) > 20:
+        state["key_events"] = events[-20:]
+
+
+def add_or_update_npc(state: dict, name: str, description: str, status: str = "alive"):
+    """Add or update an NPC in the key_npcs list."""
+    npcs = state.setdefault("key_npcs", [])
+    for npc in npcs:
+        if npc.get("name", "").lower() == name.lower():
+            npc["description"] = description
+            npc["status"] = status
+            return
+    npcs.append({"name": name, "description": description, "status": status})
+
+
+def add_quest(state: dict, name: str, description: str, status: str = "active"):
+    """Add a new quest."""
+    quests = state.setdefault("quests", [])
+    quests.append({"name": name, "description": description, "status": status})
+
+
+def update_quest_status(state: dict, quest_name: str, status: str):
+    """Update a quest's status (active, completed, failed)."""
+    quests = state.get("quests", [])
+    for quest in quests:
+        if quest.get("name", "").lower() == quest_name.lower():
+            quest["status"] = status
+            return True
+    return False
+
+
+def get_prompt_context_for_ai(state: dict) -> list:
+    """
+    Build the context list to send to OpenAI.
+    Includes campaign summary + recent conversation history.
+    """
+    messages = []
+    
+    # Add campaign context as a system-level memory
+    context_summary = get_context_summary(state)
+    if context_summary and context_summary != "No campaign context yet.":
+        messages.append({
+            "role": "system",
+            "content": f"CAMPAIGN MEMORY (long-term context):\n{context_summary}"
+        })
+    
+    # Add recent conversation history
+    history = state.get("prompt_history", [])
+    messages.extend(history)
+    
+    return messages
 

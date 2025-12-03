@@ -14,6 +14,7 @@ load_dotenv()
 Config.validate()
 
 app = Flask(__name__)
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'ai-dm-secret-key-change-in-production')
 
 # Register web portal blueprint
 try:

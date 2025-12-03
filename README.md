@@ -1,6 +1,6 @@
 # AI Dungeon Master
 
-A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (with free Edge TTS fallback), designed for Discord with persistent campaign state.
+A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (with free Edge TTS fallback), designed for Discord with persistent campaign state and long-term memory.
 
 ---
 
@@ -9,7 +9,7 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 1. **Clone the repo:**
    ```bash
    git clone https://github.com/AusSherro/AIDungeon.git
-   cd AIDungeon
+   cd AIDungeon/ai-dm-voice
    ```
 2. **Install dependencies:**
    ```powershell
@@ -32,7 +32,63 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 
 ---
 
-## 🔊 Voice Options (TTS)
+## 🎮 Discord Commands
+
+### Getting Started
+| Command | Description |
+|---------|-------------|
+| `/character name:Gandalf char_class:Wizard race:Human` | Create your character |
+| `/stats strength:14 dexterity:16 ...` | Set ability scores |
+| `/campaign [theme]` | Start a new adventure (join voice first!) |
+
+### During Play
+| Command | Description |
+|---------|-------------|
+| `/do <action>` | Describe what your character does |
+| `/say <speech>` | Speak in character |
+| `/roll <dice or skill>` | Roll dice (1d20, 2d6+3) or skill checks (athletics, stealth) |
+| `/done` | End your turn |
+
+### Character Management
+| Command | Description |
+|---------|-------------|
+| `/character` | View your character sheet |
+| `/stats` | Set ability scores |
+| `/hp damage:5` or `/hp heal:10` | Manage HP |
+| `/inventory [add/remove]` | Manage inventory |
+| `/rest short/long` | Take a rest |
+| `/deathsave` | Roll death saving throw |
+
+### Combat
+| Command | Description |
+|---------|-------------|
+| `/fight goblin:15:13 orc:25:14` | Start combat (name:hp:ac) |
+| `/attack target:Goblin bonus:5 damage:1d8+3` | Attack a target |
+| `/combatinfo` | View turn order and HP |
+| `/nextturn` | Advance to next combatant |
+| `/endcombat` | End combat encounter |
+
+### Campaign Memory
+| Command | Description |
+|---------|-------------|
+| `/status` | View party and campaign info |
+| `/recap` | AI summary of recent events |
+| `/context` | See what the AI remembers |
+| `/summarize` | Save events to long-term memory |
+| `/remember note/npc/quest` | Manually add to memory |
+
+### Settings
+| Command | Description |
+|---------|-------------|
+| `/voice true/false` | Toggle TTS on/off |
+| `/turns free/strict` | Toggle free-form vs turn order |
+| `/leave` | Disconnect from voice |
+| `/help` | Show all commands |
+| `/exportlog` | Export session log |
+
+---
+
+## � Voice Options (TTS)
 
 The bot supports multiple TTS providers to fit your needs:
 
@@ -47,180 +103,96 @@ The bot supports multiple TTS providers to fit your needs:
 TTS_PROVIDER=elevenlabs  # Options: elevenlabs, edge, disabled
 ```
 
-**Per-channel toggle:** Use `/tts false` to disable voice for a channel (saves credits!)
-
-**ElevenLabs Credit Usage:**
-- ~1000 characters per AI response ≈ 10 responses per 10k credits
-- For testing, use `TTS_PROVIDER=edge` (free Microsoft voices)
-- The bot automatically falls back to Edge TTS if ElevenLabs fails
----
-
-## 🧪 Example Usage
-
-### Flask API
-
-**Sample curl:**
-```bash
-curl -X POST http://localhost:5000/dm -H "Content-Type: application/json" -d '{"input": "The party enters the tavern."}' --output response.mp3
-```
-
-#### `/api/generate`
-
-Use this endpoint when you only need the raw text from the AI without TTS.
-The body accepts a JSON payload with:
-
-* `prompt` - the player's input or narration seed
-* `action_type` - how to treat the prompt (`do`, `say`, `story`, `continue`)
-    * `do` - describe a player action
-    * `say` - lines of in-character speech
-    * `story` - force narrative exposition
-    * `continue` - keep narrating from the last response
-* `genre` *(optional)* - e.g. `sci-fi`, `horror`, `fantasy`
-* `context` *(optional)* - array of prior messages for additional history
-
-**Sample curl:**
-```bash
-curl -X POST http://localhost:5000/api/generate \
-  -H "Content-Type: application/json" \
-  -d '{
-        "prompt": "Open the ancient door",
-        "action_type": "do",
-        "genre": "fantasy",
-        "context": ["The hallway is dark and cold."]
-      }'
-```
-The response contains JSON with a `text` field describing the next part of the story.
-
-### Discord
-- Invite your bot to your server.
-- Use `/new_campaign [prompt]` in a voice channel to start a campaign and set turn order.
-- The bot will announce the first player and prompt them to act.
-- The current player uses `/act <action>` to take their turn (AI narrates and speaks as before).
-- Narration now ends with 2-3 suggested actions to keep the story moving.
-- When finished, the player uses `/end_turn` to pass to the next player (announced in text and voice).
-- If you try to act out of turn, the bot will remind you to wait.
-- Check your current location: `/whereami`
-- Debug the channel state: `/campaignstate` (ephemeral)
-- Recap recent events: `/recap`
-- Adjust difficulty: `/set-difficulty <easy|normal|hard>` (admin only)
-- The bot manages voice connections per server, so multiple guilds can play simultaneously without issues.
+**Per-channel toggle:** Use `/voice false` to disable voice for a channel (saves credits!)
 
 ---
 
-## 📝 Character Sheets (Player Stats & Inventory)
+## 🧠 Campaign Memory System
 
-- Register your character: `/register <character_name>`
-- View your stats: `/mystats`
-- Set a stat: `/setstat <stat> <value>` (e.g. `/setstat STR 15`)
-- Add to inventory: `/inventory add "Item Name"`
-- Remove from inventory: `/inventory remove "Item"`
-- View inventory: `/inventory view`
-- Character data is stored per Discord user in `/characters/` as JSON files.
+The AI remembers your adventure through a layered memory system:
 
-### 🌐 Web Portal
+1. **Recent History** - Last 10 conversation exchanges (rolling window)
+2. **Campaign Summary** - AI-generated summary of major events (long-term)
+3. **Key NPCs** - Important characters with descriptions and status
+4. **Quests** - Active and completed objectives
+5. **Key Events** - Major plot points and discoveries
 
-When `python app.py` is running, open `http://localhost:5000/portal/` to browse all
-registered characters, edit them and view campaign summaries. The portal now shows
-combat history and includes a simple DM dashboard for NPC management.
-
----
-
-## 📜 Session Logging & Export
-
-- All narration and player messages are logged per session/channel in `/logs/` as Markdown files.
-- Log format: `[timestamp] **Speaker:** message`
-- Export your session log: `/exportlog` (zips and sends the Markdown log file)
+### Managing Memory
+- Use `/context` to see what the AI currently remembers
+- Use `/summarize` to save recent events to long-term memory (do this periodically!)
+- Use `/remember` to manually add notes, NPCs, or quests
+- The AI automatically extracts NPCs and quests when you summarize
 
 ---
 
-## 🎲 Dice Rolling
+## 🎲 Skill Checks & Roll Flow
 
-- Roll dice: `/roll <dice>` (e.g. `/roll 2d6+1`, `/roll 1d20`)
-- Skill check: `/roll athletics` (uses your STR mod, supports --adv/--disadv)
-- Saving throw: `/save WIS vs 14`
-- The bot will also auto-roll if the AI says e.g. "Roll a 1d20" in its response.
-- Dice results are shown in chat and logged.
-- Dice rolls can use character stats and proficiency.
-- Supports advantage/disadvantage.
-- Rolls feed into AI for narrative outcomes.
+The AI follows D&D 5e rules for skill checks:
 
----
+1. You describe an action with `/do I try to pick the lock`
+2. AI asks for a roll: *"Make a Dexterity (Sleight of Hand) check, DC 15"*
+3. Use `/roll sleight_of_hand` - the bot auto-applies your modifiers
+4. AI narrates the outcome based on success/failure
 
-## 🗣️ Adding New Voices
-
-Create a `voice_profiles.json` file in the project root based on
-`voice_profiles.json.example`:
-
-```json
-{
-  "Narrator": "your-elevenlabs-voice-id",
-  "Grumpy Dwarf": "..."
-}
-```
-
-Use `/setvoice` (coming soon) or edit this file to map character tags to voice
-IDs. The bot loads this file at runtime so you can swap voices without touching
-the code.
+**Supported Skills:** All 18 D&D 5e skills with proper ability score modifiers
+**Difficulty Classes:** Very Easy (5) to Nearly Impossible (30)
+**Special:** Natural 20s and 1s are highlighted with critical effects
 
 ---
 
-## 🏰 Starting a New Adventure (Slash Command)
+## ⚔️ Combat System
 
-- Use `/start_adventure [prompt]` to generate a new campaign setup (title, setting, plot hook) using GPT-4o.
-    - You can provide a prompt for inspiration, e.g. `/start_adventure pirates in a flying whale fortress`.
-    - If no prompt is given, a default adventure is generated.
-- The campaign is saved in the per-channel state and shown in chat.
-- If you are in a voice channel, the campaign intro will be read aloud using ElevenLabs TTS (Narrator voice).
+Start combat with `/fight goblin:15:13 orc:25:14` (name:hp:ac format)
+
+- **Initiative** is rolled automatically using DEX modifiers
+- **Turn order** shows current combatant with HP/AC
+- **Attacks** use `/attack target:Goblin bonus:5 damage:1d8+3`
+- **Critical hits** (nat 20) deal double damage dice
+- **Combat mode** enforces strict turn order until `/endcombat`
 
 ---
 
-## 🕹️ Gameplay Loop
+## 🌐 Web Portal
 
-1. Start a campaign with `/new_campaign` or `/start_adventure`.
-2. The bot announces the turn order and prompts the first player.
-3. On your turn, describe your action with `/act <action>`.
-4. Inline dice like `[1d20+2]` are rolled automatically when you `/act`.
-5. If a roll is required by the DM, use `/roll` or `/save`.
-6. Finish your turn with `/end_turn` (or enable `/set_auto_advance true`).
-7. Acting out of turn triggers a reminder to wait.
-8. Admins can reset a session with `/reset-campaign` or force the turn with `/force-turn <user>`.
+Access `http://localhost:5000/portal/` when the Flask app is running:
+
+- **Character List** - View all characters with class/race/level
+- **Character Creation** - Full form with dice roller and standard array buttons
+- **Character Editor** - Edit stats, inventory, and proficiencies
+- **Campaign View** - See memory, NPCs, quests, and key events
+- **DM Dashboard** - Overview of all active campaigns
 
 ---
 
 ## 🗃️ State Persistence
-- Game state is saved per session (API) or per Discord channel (bot) in the `state/` folder as JSON.
-- Each channel stores its campaign title, realm, plot hook, current location, player list and recent prompt history.
-- You can delete these files to reset a session.
+
+- Game state is saved per Discord channel in `state/` as JSON
+- Character data is saved per Discord user ID in `characters/`
+- Combat encounters are saved in `combat/`
+- Session logs are saved in `logs/` as Markdown
 
 ---
 
-## 🔒 Security
-- Never commit your real `.env` file or API keys.
-
----
-
-## 🛠️ Extending
-- Add Whisper for STT, dice mechanics, or a web frontend by creating new modules in `services/` or `utils/`.
-
----
-
-## 📁 Structure
+## 📁 Project Structure
 ```
-AIDungeon/
+ai-dm-voice/
 ├── app.py                 # Flask REST API & web portal
-├── discord_bot.py         # Main Discord bot
+├── discord_bot.py         # Main Discord bot (24 commands)
 ├── config.py              # Configuration management
 ├── services/
-│   ├── openai_service.py  # GPT-4o integration
-│   └── elevenlabs_service.py  # TTS integration
+│   ├── openai_service.py  # GPT-4o + skill check detection + memory
+│   └── elevenlabs_service.py  # TTS with Edge fallback
 ├── utils/
-│   ├── character_manager.py   # D&D character sheets
-│   ├── combat_manager.py      # Combat tracking
-│   ├── dice_roller.py         # Dice mechanics
-│   ├── state_manager.py       # State persistence
+│   ├── character_manager.py   # D&D 5e character sheets
+│   ├── combat_manager.py      # Initiative, attacks, HP tracking
+│   ├── dice_roller.py         # Dice notation parser
+│   ├── state_manager.py       # Campaign state + memory system
 │   ├── voice_map.py           # Voice ID mapping
-│   └── voice_parser.py        # Voice tag extraction
-├── webportal/             # Web UI templates
+│   ├── voice_parser.py        # Voice tag extraction + TTS cleanup
+│   └── prompt_builder.py      # Dynamic system prompts
+├── webportal/
+│   ├── routes.py              # Flask routes
+│   └── templates/             # HTML templates
 ├── state/                 # Game state (per channel)
 ├── characters/            # Player character data
 ├── combat/                # Combat encounter data
@@ -231,33 +203,9 @@ AIDungeon/
 
 ---
 
-## 🛡️ Combat System
-- Initiative, HP, and attack resolution are now handled automatically.
-- Combatants are tracked and incapacitated are skipped in turn order.
-- Reactions and D&D turn structure are supported.
-
-## 🎲 Dice Rolling
-- Dice rolls can use character stats and proficiency.
-- Supports advantage/disadvantage.
-- DM prompts reference the full D&D 5e difficulty classes (DC 5–30) and call out the relevant ability or saving throw, including proficiency bonuses and advantage/disadvantage. They also remind players about initiative order, Armor Class, and hit point tracking.
-- Rolls feed into AI for narrative outcomes.
-
-## 🧙 Character Sheets
-- Now include proficiency, skills, HP, class/race, spell slots, XP, and level.
-- Stat-based rolls and skill checks are supported.
-
-## 🤖 AI Context
-- AI receives character and combat state for more immersive, rules-aware narration.
-
-## 🔄 Turn Management
-- Auto-skips incapacitated combatants.
-- Supports reactions and D&D turn structure.
-
-## 🛠️ Quality of Life
-- `/recap` for session summaries
-- `/npc <name>` for NPC info
-- `/location` for area description
-- Auto-save and undo/rewind supported
+## 🔒 Security
+- Never commit your real `.env` file or API keys.
+- The web portal is for local use - don't expose to the internet without auth!
 
 ---
 
