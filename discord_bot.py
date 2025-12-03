@@ -562,34 +562,74 @@ async def fight_start(interaction: discord.Interaction, enemies: str):
     for enemy in enemies.split():
         parts = enemy.split(':')
         if len(parts) >= 3:
-            enemy_list.append({
-                'name': parts[0].title(),
-                'hp': int(parts[1]),
-                'ac': int(parts[2])
-            })
+            try:
+                enemy_list.append({
+                    'name': parts[0].title(),
+                    'hp': int(parts[1]),
+                    'ac': int(parts[2])
+                })
+            except ValueError:
+                continue
     
     if not enemy_list:
-        await interaction.response.send_message("Format: `/fight goblin:15:13 orc:25:14`", ephemeral=True)
+        await interaction.response.send_message(
+            "**Format:** `/fight goblin:15:13 orc:25:14`\n"
+            "• goblin = enemy name\n"
+            "• 15 = hit points\n"  
+            "• 13 = armor class\n\n"
+            "Add `*2` for multiples: `goblin*3:15:13` = 3 goblins",
+            ephemeral=True
+        )
         return
     
-    # Get players
+    # Get players from campaign
     state = load_state(channel_id)
-    players = [(pid, load_character(pid).get('name', f'Player') if load_character(pid) else 'Player') 
+    
+    if not state.get('campaign_title'):
+        await interaction.response.send_message("Start a campaign first with `/campaign`!", ephemeral=True)
+        return
+    
+    players = [(pid, load_character(pid).get('name', 'Adventurer') if load_character(pid) else 'Adventurer') 
                for pid in state.get('players', [])]
     
+    if not players:
+        # Use whoever started the fight
+        char = load_character(str(interaction.user.id))
+        char_name = char.get('name', interaction.user.display_name) if char else interaction.user.display_name
+        players = [(str(interaction.user.id), char_name)]
+    
+    # Start combat
     combat_state = start_combat(channel_id, players, enemy_list)
     
     # Roll initiative
     init_state = roll_initiative(channel_id)
-    order = [f"{c['name']} ({c['initiative']})" for c in init_state['turn_order']]
     
+    # Mark campaign as in combat
+    state['in_combat'] = True
+    state['free_form'] = False  # Combat uses strict turn order
+    save_state(channel_id, state)
+    
+    # Build initiative display
+    order_display = []
+    for c in init_state['turn_order']:
+        hp_str = f"{c['hp']}/{c.get('max_hp', c['hp'])}"
+        order_display.append(f"**{c['name']}** (Init: {c['initiative']}, HP: {hp_str}, AC: {c['ac']})")
+    
+    first = init_state['turn_order'][0]
     enemy_names = ', '.join(e['name'] for e in enemy_list)
-    await interaction.response.send_message(
+    
+    msg = (
         f"⚔️ **COMBAT BEGINS!**\n"
-        f"Enemies: {enemy_names}\n\n"
-        f"**Initiative:** {' → '.join(order)}\n\n"
-        f"First up: **{init_state['turn_order'][0]['name']}**!"
+        f"───────────────────────\n"
+        f"**Enemies:** {enemy_names}\n\n"
+        f"**Initiative Order:**\n" + "\n".join(f"• {o}" for o in order_display) + "\n\n"
+        f"───────────────────────\n"
+        f"🎯 **{first['name']}**, you're up! Use `/attack` or `/do` for your action."
     )
+    
+    await interaction.response.send_message(msg)
+    log_message(channel_id, "DM", f"Combat started: {enemy_names}")
+    await play_tts(interaction, f"Roll for initiative! {first['name']}, you're up first!", "Narrator")
 
 
 @bot.tree.command(name="attack", description="Attack a target")
@@ -665,15 +705,40 @@ async def next_turn_cmd(interaction: discord.Interaction):
         return
     
     current = state['turn_order'][state['current_turn']]
-    await interaction.response.send_message(f"➡️ **{current['name']}**, it's your turn!")
+    
+    # Check if it's an enemy's turn
+    if current.get('type') == 'enemy':
+        await interaction.response.send_message(
+            f"➡️ **{current['name']}** (Enemy) takes their turn!\n"
+            f"*The DM controls this enemy. Use `/nextturn` again after their action.*"
+        )
+    else:
+        player_id = current.get('id')
+        await interaction.response.send_message(
+            f"➡️ <@{player_id}> (**{current['name']}**), it's your turn!\n"
+            f"Use `/attack` to strike or `/do` for other actions."
+        )
 
 
 @bot.tree.command(name="endcombat", description="End the current combat")
 async def end_combat_cmd(interaction: discord.Interaction):
     """End the combat encounter."""
     channel_id = str(interaction.channel.id)
+    
+    # End the combat
     end_combat(channel_id)
-    await interaction.response.send_message("⚔️ Combat has ended.")
+    
+    # Restore free-form mode
+    state = load_state(channel_id)
+    state['in_combat'] = False
+    state['free_form'] = True
+    save_state(channel_id, state)
+    
+    await interaction.response.send_message(
+        "⚔️ **Combat has ended.**\n"
+        "Back to free-form exploration. Anyone can `/do` actions."
+    )
+    await play_tts(interaction, "Combat has ended. What do you do now?", "Narrator")
 
 
 # =============================================================================
