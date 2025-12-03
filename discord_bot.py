@@ -164,34 +164,37 @@ async def do_action(interaction: discord.Interaction, action: str):
     """Take an action in the campaign."""
     channel_id = str(interaction.channel.id)
     state = load_state(channel_id)
-    turn_order = state.get("turn_order", [])
-    current_index = state.get("current_turn_index", 0)
 
-    if not turn_order:
+    if not state.get("campaign_title"):
         await interaction.response.send_message("No campaign running. Use `/campaign` to start one!")
         return
 
-    # Check if it's this player's turn
-    current_player_id = turn_order[current_index]
-    if str(interaction.user.id) != current_player_id:
-        current_player = f"<@{current_player_id}>"
-        await interaction.response.send_message(f"⏳ It's {current_player}'s turn right now.", ephemeral=True)
-        return
+    # Check turn order (if not free-form mode)
+    turn_order = state.get("turn_order", [])
+    current_index = state.get("current_turn_index", 0)
+    
+    if not state.get("free_form", True) and turn_order:
+        current_player_id = turn_order[current_index]
+        if str(interaction.user.id) != current_player_id:
+            current_player = f"<@{current_player_id}>"
+            await interaction.response.send_message(f"⏳ It's {current_player}'s turn right now.", ephemeral=True)
+            return
 
     await interaction.response.defer()
+
+    # Get character info
+    user_id = str(interaction.user.id)
+    char = load_character(user_id)
+    char_name = char.get('name', interaction.user.display_name) if char else interaction.user.display_name
 
     # Process inline dice rolls [1d20+5]
     rolls = extract_inline_rolls(action)
     for notation, result in rolls.items():
         action = action.replace(f"[{notation}]", f"**{result}** ({notation})")
 
-    # Get character name
-    char = load_character(str(interaction.user.id))
-    char_name = char.get('name', interaction.user.display_name) if char else interaction.user.display_name
-
     # Build system prompt and get AI response
     system_prompt = build_system_prompt(state)
-    narration, updated_state = get_dm_response(action, state, str(interaction.user.id), system_prompt=system_prompt)
+    narration, updated_state = get_dm_response(action, state, user_id, system_prompt=system_prompt)
     
     # Process loot
     loot_items = updated_state.pop('recent_loot', [])
@@ -203,20 +206,20 @@ async def do_action(interaction: discord.Interaction, action: str):
     
     # Add loot notifications
     for item in loot_items:
-        add_inventory(str(interaction.user.id), item)
+        add_inventory(user_id, item)
         output += f"\n\n🎒 *{char_name} obtained: {item}*"
+
+    # Check if AI is asking for a skill check
+    pending = updated_state.get('pending_roll')
+    if pending and pending.get('skill'):
+        skill_name = pending['skill'].replace('_', ' ').title()
+        dc_text = f" (DC {pending['dc']})" if pending.get('dc') else ""
+        output += f"\n\n🎲 **Roll {skill_name}{dc_text}!** Use `/roll {pending['skill']}`"
 
     await interaction.followup.send(output)
     
-    # Play TTS
+    # Play TTS (narration only, not the roll prompt)
     await play_tts(interaction, text, voice_tag)
-
-    # Auto-advance or remind about /done
-    if state.get("auto_advance"):
-        next_idx = (current_index + 1) % len(turn_order)
-        set_current_turn_index(updated_state, next_idx)
-        next_player = f"<@{turn_order[next_idx]}>"
-        await interaction.followup.send(f"➡️ {next_player}, your turn!")
     
     save_state(channel_id, updated_state)
     log_message(channel_id, char_name, action)
@@ -440,10 +443,24 @@ async def set_stats(
 @app_commands.describe(dice="Dice notation or skill name", advantage="Roll with advantage", disadvantage="Roll with disadvantage")
 async def roll_cmd(interaction: discord.Interaction, dice: str, advantage: bool = False, disadvantage: bool = False):
     """Roll dice or make a skill check."""
+    channel_id = str(interaction.channel.id)
     user_id = str(interaction.user.id)
     char = load_character(user_id)
     char_name = char.get('name', interaction.user.display_name) if char else interaction.user.display_name
-    skill = dice.lower()
+    skill = dice.lower().replace(' ', '_')
+    
+    # Check for pending roll from AI
+    state = load_state(channel_id)
+    pending = state.get('pending_roll')
+    dc = None
+    
+    if pending and pending.get('player_id') == user_id:
+        dc = pending.get('dc')
+    
+    result = None
+    total = None
+    mod = 0
+    skill_name = dice
     
     # Check if it's a skill/ability check
     if skill in SKILLS or skill.upper() in ['STR','DEX','CON','INT','WIS','CHA']:
@@ -453,7 +470,7 @@ async def roll_cmd(interaction: discord.Interaction, dice: str, advantage: bool 
         
         if skill in SKILLS:
             mod = calculate_skill_bonus(char, skill)
-            skill_name = skill.title()
+            skill_name = skill.replace('_', ' ').title()
         else:
             mod = get_ability_modifier(char.get(skill.upper(), 10))
             skill_name = skill.upper()
@@ -476,9 +493,20 @@ async def roll_cmd(interaction: discord.Interaction, dice: str, advantage: bool 
         mod_str = f"+{mod}" if mod >= 0 else str(mod)
         
         # Check for nat 20/1
-        crit = " 🌟 **Critical!**" if result == 20 else " 💀 **Critical Fail!**" if result == 1 else ""
+        crit = " 🌟 **Natural 20!**" if result == 20 else " 💀 **Natural 1!**" if result == 1 else ""
         
         msg = f"🎲 **{char_name}** rolls {skill_name}: **{total}** {roll_info} {mod_str}{crit}"
+        
+        # If there's a DC, show success/failure
+        if dc:
+            if result == 20:
+                msg += " ✅ **SUCCESS!**"
+            elif result == 1:
+                msg += " ❌ **FAILURE!**"
+            elif total >= dc:
+                msg += f" ✅ **SUCCESS!** (DC {dc})"
+            else:
+                msg += f" ❌ **FAILURE!** (DC {dc})"
     else:
         # Regular dice roll
         try:
@@ -491,7 +519,32 @@ async def roll_cmd(interaction: discord.Interaction, dice: str, advantage: bool 
             return
     
     await interaction.response.send_message(msg)
-    log_message(str(interaction.channel.id), char_name, msg)
+    log_message(channel_id, char_name, msg)
+    
+    # If there was a pending roll, resolve it with the AI
+    if pending and pending.get('player_id') == user_id and total is not None:
+        await interaction.followup.send("*Resolving action...*", ephemeral=True)
+        
+        # Build result message for AI
+        success = (result == 20) or (dc and total >= dc and result != 1)
+        result_text = f"I rolled {total} for {skill_name}"
+        if dc:
+            result_text += f" against DC {dc}. {'Success!' if success else 'Failure.'}"
+        
+        # Get AI's response to the roll result
+        system_prompt = build_system_prompt(state)
+        narration, updated_state = get_dm_response(result_text, state, user_id, system_prompt=system_prompt)
+        
+        # Clear the pending roll
+        updated_state['pending_roll'] = None
+        save_state(channel_id, updated_state)
+        
+        # Send the outcome
+        voice_tag = extract_voice_tag(narration)
+        text = clean_text(narration)
+        await interaction.followup.send(f"**Outcome:**\n{text}")
+        await play_tts(interaction, text, voice_tag)
+        log_message(channel_id, "DM", text)
 
 
 # =============================================================================
@@ -820,6 +873,25 @@ async def voice_toggle(interaction: discord.Interaction, enabled: bool):
     
     status = "🔊 **enabled**" if enabled else "🔇 **disabled**"
     await interaction.response.send_message(f"Voice narration is now {status}")
+
+
+@bot.tree.command(name="turns", description="Toggle turn order mode")
+@app_commands.describe(mode="Turn order mode")
+@app_commands.choices(mode=[
+    app_commands.Choice(name="Free-form (anyone can act)", value="free"),
+    app_commands.Choice(name="Strict (follow turn order)", value="strict")
+])
+async def turns_mode(interaction: discord.Interaction, mode: str):
+    """Toggle between free-form and strict turn order."""
+    channel_id = str(interaction.channel.id)
+    state = load_state(channel_id)
+    state["free_form"] = (mode == "free")
+    save_state(channel_id, state)
+    
+    if mode == "free":
+        await interaction.response.send_message("🎭 **Free-form mode** - Anyone can `/do` actions anytime!")
+    else:
+        await interaction.response.send_message("📋 **Strict turn order** - Must follow turn order. Use `/done` to pass turn.")
 
 
 @bot.tree.command(name="leave", description="Disconnect bot from voice")

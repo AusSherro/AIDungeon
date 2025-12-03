@@ -6,25 +6,35 @@ from dotenv import load_dotenv
 load_dotenv()
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
-ROLL_PATTERN = re.compile(r'roll (?:a |an )?(\d*d\d+|d20)', re.IGNORECASE)
-# Support "DC 15" or "need 15 or higher" styles
-DC_PATTERN = re.compile(r'(?:dc\s*(\d+)|need (\d+) or higher)', re.IGNORECASE)
+# Pattern to detect skill check requests from the AI
+SKILL_CHECK_PATTERN = re.compile(
+    r'roll\s+(?:a\s+)?(?:(?P<ability>strength|dexterity|constitution|intelligence|wisdom|charisma)\s*\()?'
+    r'(?P<skill>acrobatics|animal handling|arcana|athletics|deception|history|insight|intimidation|'
+    r'investigation|medicine|nature|perception|performance|persuasion|religion|sleight of hand|'
+    r'stealth|survival|str|dex|con|int|wis|cha)'
+    r'(?:\s*\))?\s*(?:check)?'
+    r'(?:,?\s*dc\s*(?P<dc>\d+))?',
+    re.IGNORECASE
+)
+
+# Backup pattern for simpler "DC X" mentions
+DC_PATTERN = re.compile(r'dc\s*(\d+)', re.IGNORECASE)
+
 LOOT_PATTERN = re.compile(r'you (?:find|found|pick up|obtain|grab) (?:a|an|the)?\s*"?([^"\n]+)"?', re.IGNORECASE)
 XP_PATTERN = re.compile(r"(?:defeated?|killed?|vanquished?)\s+(?:the\s+)?(\w+)", re.I)
 
-def detect_roll_request(text, player_id=None):
-    """Return pending_roll dict if the text asks for a dice roll."""
-    match = ROLL_PATTERN.search(text)
-    if not match:
-        return None
-    dice = match.group(1)
-    dc_match = DC_PATTERN.search(text)
-    pending = {'type': dice, 'player_id': player_id}
-    if dc_match:
-        dc_value = dc_match.group(1) or dc_match.group(2)
-        if dc_value:
-            pending['dc'] = int(dc_value)
-    return pending
+
+def detect_skill_check(text):
+    """
+    Detect if the AI is asking for a skill check.
+    Returns dict with skill, dc if found, else None.
+    """
+    match = SKILL_CHECK_PATTERN.search(text)
+    if match:
+        skill = match.group('skill').lower().replace(' ', '_')
+        dc = int(match.group('dc')) if match.group('dc') else None
+        return {'skill': skill, 'dc': dc}
+    return None
 
 
 def award_xp_for_victory(text, player_id):
@@ -89,16 +99,28 @@ def get_dm_response(user_input, state, player_id=None, system_prompt=None):
         print(f"OpenAI API Error: {e}")
         reply = "The mystical energies are disrupted... please try again."
     
-    # Update state and check for roll requests
+    # Update state
     state['prompt_history'] = messages + [{"role": "assistant", "content": reply}]
     if len(state['prompt_history']) > 10:
         state['prompt_history'] = state['prompt_history'][-10:]
-    pending = detect_roll_request(reply, player_id)
-    if pending:
-        state['pending_roll'] = pending
+    
+    # Check if AI is asking for a skill check
+    skill_check = detect_skill_check(reply)
+    if skill_check:
+        state['pending_roll'] = {
+            'player_id': player_id,
+            'skill': skill_check['skill'],
+            'dc': skill_check.get('dc'),
+            'action': user_input  # Remember what they were trying to do
+        }
+    else:
+        state['pending_roll'] = None  # Clear if no roll requested
+    
+    # Check for loot
     loot_match = LOOT_PATTERN.search(reply)
     if loot_match:
         state.setdefault('recent_loot', []).append(loot_match.group(1).strip())
+    
     award_xp_for_victory(reply, player_id)
     return reply, state
 

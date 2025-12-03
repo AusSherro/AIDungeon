@@ -23,6 +23,9 @@ DEFAULT_STATE = {
     "current_turn_index": 0,
     "auto_advance": False,
     "tts_enabled": True,
+    "pending_roll": None,  # {player_id, skill, dc, action} - waiting for a roll
+    "in_combat": False,
+    "free_form": True,  # If True, anyone can act. If False, strict turn order
 }
 
 def _get_state_path(session_id):
