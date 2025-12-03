@@ -1,15 +1,15 @@
-# ai_dm_voice_app
+# AI Dungeon Master
 
-A modular, voice-enabled AI Dungeon Master using GPT-4o and ElevenLabs, with Discord support and persistent campaign state.
+A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS, designed for Discord with persistent campaign state.
 
 ---
 
 ## 🚀 Quick Start
 
-1. **Clone the repo and enter the folder:**
-   ```powershell
-   git clone <repo-url>
-   cd ai-dm-voice/ai_dm_voice_app
+1. **Clone the repo:**
+   ```bash
+   git clone https://github.com/AusSherro/AIDungeon.git
+   cd AIDungeon
    ```
 2. **Install dependencies:**
    ```powershell
@@ -182,19 +182,27 @@ the code.
 
 ## 📁 Structure
 ```
-ai_dm_voice_app/
-├── app.py
-├── discord_bot.py
-├── utils/
-│   ├── voice_parser.py
-│   ├── voice_map.py
-│   └── state_manager.py
+AIDungeon/
+├── app.py                 # Flask REST API & web portal
+├── discord_bot.py         # Main Discord bot
+├── config.py              # Configuration management
 ├── services/
-│   ├── openai_service.py
-│   └── elevenlabs_service.py
-├── .env.example
-├── requirements.txt
-└── README.md
+│   ├── openai_service.py  # GPT-4o integration
+│   └── elevenlabs_service.py  # TTS integration
+├── utils/
+│   ├── character_manager.py   # D&D character sheets
+│   ├── combat_manager.py      # Combat tracking
+│   ├── dice_roller.py         # Dice mechanics
+│   ├── state_manager.py       # State persistence
+│   ├── voice_map.py           # Voice ID mapping
+│   └── voice_parser.py        # Voice tag extraction
+├── webportal/             # Web UI templates
+├── state/                 # Game state (per channel)
+├── characters/            # Player character data
+├── combat/                # Combat encounter data
+├── logs/                  # Session transcripts
+├── .env.example           # Environment template
+└── requirements.txt       # Dependencies
 ```
 
 ---
@@ -229,5 +237,5 @@ ai_dm_voice_app/
 
 ---
 
-##  License
-This project is licensed under the MIT License. See [LICENSE](../LICENSE) for details.
+## 📄 License
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
