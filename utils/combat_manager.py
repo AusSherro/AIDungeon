@@ -22,7 +22,9 @@ def _expand_enemy(enemy):
             'id': None,
             'name': f"{name} {i+1}" if count > 1 else name,
             'hp': enemy['hp'],
+            'max_hp': enemy['hp'],
             'ac': enemy['ac'],
+            'init_bonus': enemy.get('init_bonus', 0),
             'status': [],
             'initiative': 0,
         }
@@ -51,31 +53,57 @@ def save_combat(channel_id, data):
             json.dump(data, f, indent=2, ensure_ascii=False)
 
 def start_combat(channel_id, players, enemies):
-    # players: list of (user_id, display_name)
-    # enemies: list of dicts {name, hp, ac}
+    """
+    Start a combat encounter.
+    players: list of (user_id, display_name)
+    enemies: list of dicts {name, hp, ac}
+    """
     combatants = []
     for user_id, name in players:
         char = load_character(user_id)
-        hp = char.get('CON', 10) if char else 10
-        ac = char.get('DEX', 10) if char else 10
-        combatants.append({'type': 'player', 'id': user_id, 'name': name, 'hp': hp, 'ac': ac, 'status': [], 'initiative': 0})
+        if char:
+            hp = char.get('hp', 10)
+            max_hp = char.get('max_hp', 10)
+            ac = char.get('ac', 10)
+            dex_mod = (char.get('DEX', 10) - 10) // 2
+            init_bonus = char.get('initiative_bonus', 0) + dex_mod
+        else:
+            hp = max_hp = 10
+            ac = 10
+            init_bonus = 0
+        combatants.append({
+            'type': 'player', 
+            'id': user_id, 
+            'name': name, 
+            'hp': hp,
+            'max_hp': max_hp,
+            'ac': ac, 
+            'init_bonus': init_bonus,
+            'status': [], 
+            'initiative': 0
+        })
     for enemy in enemies:
         combatants.extend(_expand_enemy(enemy))
     state = {
         'combatants': combatants,
         'turn_order': [],
         'active': False,
-        'current_turn': 0
+        'current_turn': 0,
+        'round': 1
     }
     save_combat(channel_id, state)
     return state
 
 def roll_initiative(channel_id):
+    """Roll initiative for all combatants and sort turn order."""
     state = load_combat(channel_id)
     if not state:
         return None
     for c in state['combatants']:
-        c['initiative'] = roll_dice('1d20')[0] + (c['ac'] // 2 - 5 if c['type'] == 'player' else 0)
+        roll = roll_dice('1d20')[0]
+        bonus = c.get('init_bonus', 0)
+        c['initiative'] = roll + bonus
+        c['init_roll'] = roll  # Store the raw roll for display
     state['turn_order'] = sorted(state['combatants'], key=lambda x: x['initiative'], reverse=True)
     state['active'] = True
     state['current_turn'] = 0
@@ -104,16 +132,55 @@ def attack(channel_id, attacker_id, target_name, attack_bonus, damage_dice):
     target = next((c for c in state['combatants'] if c['name'].lower() == target_name.lower()), None)
     if not attacker or not target:
         return None
-    roll = roll_dice('1d20')[0] + attack_bonus
-    hit = roll >= target.get('ac', 10)
+    
+    # Roll attack
+    attack_roll = roll_dice('1d20')[0]
+    is_crit = attack_roll == 20
+    is_fumble = attack_roll == 1
+    total_attack = attack_roll + attack_bonus
+    hit = (total_attack >= target.get('ac', 10) or is_crit) and not is_fumble
+    
     damage = 0
     if hit:
-        damage = roll_dice(damage_dice)[0]
+        damage_result = roll_dice(damage_dice)[0]
+        if is_crit:
+            # Critical hit - double the dice (simplified: double damage)
+            damage = damage_result * 2
+        else:
+            damage = damage_result
         target['hp'] = max(0, target.get('hp', 0) - damage)
         if target['hp'] == 0:
-            target.setdefault('status', []).append('unconscious')
+            if 'unconscious' not in target.get('status', []):
+                target.setdefault('status', []).append('unconscious')
+    
     save_combat(channel_id, state)
-    return {'roll': roll, 'hit': hit, 'damage': damage, 'target': target['name'], 'target_hp': target['hp']}
+    return {
+        'roll': attack_roll,
+        'total': total_attack,
+        'hit': hit,
+        'crit': is_crit,
+        'fumble': is_fumble,
+        'damage': damage,
+        'target': target['name'],
+        'target_hp': target['hp'],
+        'target_max_hp': target.get('max_hp', target['hp'])
+    }
+
+
+def get_combat_status(channel_id):
+    """Get formatted combat status for display."""
+    state = load_combat(channel_id)
+    if not state or not state.get('active'):
+        return None
+    
+    current = state['turn_order'][state['current_turn']]
+    
+    return {
+        'round': state.get('round', 1),
+        'current_combatant': current,
+        'turn_order': state['turn_order'],
+        'current_index': state['current_turn']
+    }
 
 def add_reaction(channel_id, user_id, reaction):
     state = load_combat(channel_id)

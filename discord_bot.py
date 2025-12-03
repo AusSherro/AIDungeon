@@ -36,17 +36,26 @@ from utils.logger import log_message, get_log_file
 from utils.character_manager import (
     register_character,
     load_character,
+    save_character,
     set_stat,
+    set_class,
+    set_race,
     add_inventory,
     remove_inventory,
     get_character_summary,
+    damage_character,
+    heal_character,
+    long_rest,
+    short_rest,
+    death_save,
     SKILLS,
     calculate_skill_bonus,
     get_ability_modifier,
 )
 from utils.combat_manager import (
     start_combat, roll_initiative, next_turn, 
-    get_active_combatant, end_combat, attack
+    get_active_combatant, end_combat, attack,
+    get_combat_status, load_combat
 )
 
 load_dotenv()
@@ -314,23 +323,72 @@ async def recap(interaction: discord.Interaction):
 # CHARACTER COMMANDS
 # =============================================================================
 
+# D&D 5e Classes and Races for autocomplete
+DND_CLASSES = [
+    "Barbarian", "Bard", "Cleric", "Druid", "Fighter", "Monk",
+    "Paladin", "Ranger", "Rogue", "Sorcerer", "Warlock", "Wizard"
+]
+DND_RACES = [
+    "Human", "Elf", "Dwarf", "Halfling", "Dragonborn", "Gnome",
+    "Half-Elf", "Half-Orc", "Tiefling"
+]
+
 @bot.tree.command(name="character", description="Create or view your character")
-@app_commands.describe(name="Character name (leave blank to view current)")
-async def character_cmd(interaction: discord.Interaction, name: str = ""):
+@app_commands.describe(
+    name="Character name (leave blank to view current)",
+    char_class="Your class (Fighter, Wizard, etc.)",
+    race="Your race (Human, Elf, etc.)"
+)
+@app_commands.choices(char_class=[app_commands.Choice(name=c, value=c) for c in DND_CLASSES])
+@app_commands.choices(race=[app_commands.Choice(name=r, value=r) for r in DND_RACES])
+async def character_cmd(
+    interaction: discord.Interaction, 
+    name: str = "",
+    char_class: str = "",
+    race: str = ""
+):
     """Create a new character or view your current one."""
     user_id = str(interaction.user.id)
     
     if name:
-        # Create/update character
-        register_character(user_id, name)
-        await interaction.response.send_message(f"✨ Character **{name}** created! Use `/stats` to set your abilities.")
+        # Create new character
+        class_choice = char_class if char_class else "Fighter"
+        race_choice = race if race else "Human"
+        register_character(user_id, name, class_choice, race_choice)
+        
+        char = load_character(user_id)
+        hp = char.get('max_hp', 10)
+        
+        await interaction.response.send_message(
+            f"✨ **{name}** the {race_choice} {class_choice} is ready for adventure!\n"
+            f"HP: {hp} | Use `/stats` to set your ability scores."
+        )
+    elif char_class or race:
+        # Update existing character
+        char = load_character(user_id)
+        if not char:
+            await interaction.response.send_message("Create a character first with `/character <name>`", ephemeral=True)
+            return
+        
+        updates = []
+        if char_class:
+            set_class(user_id, char_class)
+            updates.append(f"Class: {char_class}")
+        if race:
+            set_race(user_id, race)
+            updates.append(f"Race: {race}")
+        
+        await interaction.response.send_message(f"📝 Updated: {', '.join(updates)}")
     else:
         # View character
         summary = get_character_summary(user_id)
         if summary:
             await interaction.response.send_message(summary)
         else:
-            await interaction.response.send_message("No character yet. Use `/character <name>` to create one!")
+            await interaction.response.send_message(
+                "No character yet! Create one:\n"
+                "`/character name:Gandalf char_class:Wizard race:Human`"
+            )
 
 
 @bot.tree.command(name="stats", description="Set your character's stats")
@@ -490,12 +548,66 @@ async def attack_cmd(interaction: discord.Interaction, target: str, bonus: int, 
         await interaction.response.send_message("No combat or target not found!", ephemeral=True)
         return
     
-    if result['hit']:
-        msg = f"⚔️ **{char_name}** hits **{target}** for **{result['damage']}** damage! ({result['target_hp']} HP remaining)"
+    # Build attack message with crit/fumble info
+    if result.get('fumble'):
+        msg = f"⚔️ **{char_name}** attacks **{target}**... 💀 **Critical Miss!** (Rolled 1)"
+    elif result.get('crit'):
+        msg = f"⚔️ **{char_name}** 🌟 **CRITICAL HIT** on **{target}** for **{result['damage']}** damage! ({result['target_hp']}/{result['target_max_hp']} HP)"
+    elif result['hit']:
+        msg = f"⚔️ **{char_name}** hits **{target}** for **{result['damage']}** damage! ({result['target_hp']}/{result['target_max_hp']} HP)"
     else:
-        msg = f"⚔️ **{char_name}** attacks **{target}**... and misses! (Rolled {result['roll']})"
+        msg = f"⚔️ **{char_name}** attacks **{target}**... and misses! (Rolled {result['total']} vs AC)"
+    
+    # Check if target is down
+    if result['target_hp'] == 0:
+        msg += f"\n💀 **{target}** is down!"
     
     await interaction.response.send_message(msg)
+    log_message(channel_id, char_name, msg)
+
+
+@bot.tree.command(name="combatinfo", description="Show current combat status")
+async def combat_info(interaction: discord.Interaction):
+    """Display combat status and turn order."""
+    channel_id = str(interaction.channel.id)
+    status = get_combat_status(channel_id)
+    
+    if not status:
+        await interaction.response.send_message("No active combat.", ephemeral=True)
+        return
+    
+    # Build turn order display
+    turn_display = []
+    for i, c in enumerate(status['turn_order']):
+        hp_str = f"{c['hp']}/{c.get('max_hp', c['hp'])}"
+        indicator = "▶️ " if i == status['current_index'] else "   "
+        status_str = f" [{', '.join(c['status'])}]" if c.get('status') else ""
+        turn_display.append(f"{indicator}**{c['name']}** - HP: {hp_str}{status_str}")
+    
+    current = status['current_combatant']
+    output = (
+        f"⚔️ **COMBAT** - Round {status['round']}\n"
+        f"───────────────────────\n"
+        + "\n".join(turn_display) + "\n"
+        f"───────────────────────\n"
+        f"Current turn: **{current['name']}**"
+    )
+    
+    await interaction.response.send_message(output)
+
+
+@bot.tree.command(name="nextturn", description="Advance to next combatant's turn")
+async def next_turn_cmd(interaction: discord.Interaction):
+    """Move to the next turn in combat."""
+    channel_id = str(interaction.channel.id)
+    state = next_turn(channel_id)
+    
+    if not state:
+        await interaction.response.send_message("No active combat.", ephemeral=True)
+        return
+    
+    current = state['turn_order'][state['current_turn']]
+    await interaction.response.send_message(f"➡️ **{current['name']}**, it's your turn!")
 
 
 @bot.tree.command(name="endcombat", description="End the current combat")
@@ -504,6 +616,188 @@ async def end_combat_cmd(interaction: discord.Interaction):
     channel_id = str(interaction.channel.id)
     end_combat(channel_id)
     await interaction.response.send_message("⚔️ Combat has ended.")
+
+
+# =============================================================================
+# HP & REST COMMANDS
+# =============================================================================
+
+@bot.tree.command(name="hp", description="Manage HP - take damage or heal")
+@app_commands.describe(
+    damage="Amount of damage to take (positive number)",
+    heal="Amount to heal (positive number)",
+    set_hp="Set HP to specific value"
+)
+async def hp_cmd(
+    interaction: discord.Interaction,
+    damage: Optional[int] = None,
+    heal: Optional[int] = None,
+    set_hp: Optional[int] = None
+):
+    """Manage your character's HP."""
+    user_id = str(interaction.user.id)
+    char = load_character(user_id)
+    
+    if not char:
+        await interaction.response.send_message("Create a character first!", ephemeral=True)
+        return
+    
+    char_name = char.get('name', 'Character')
+    
+    if damage:
+        damage_character(user_id, damage)
+        char = load_character(user_id)
+        msg = f"💔 **{char_name}** takes **{damage}** damage! (HP: {char['hp']}/{char['max_hp']})"
+        if char['hp'] == 0:
+            msg += "\n⚠️ **{char_name}** is unconscious! Roll death saves with `/deathsave`"
+    elif heal:
+        heal_character(user_id, heal)
+        char = load_character(user_id)
+        msg = f"💚 **{char_name}** heals **{heal}** HP! (HP: {char['hp']}/{char['max_hp']})"
+    elif set_hp is not None:
+        char['hp'] = max(0, min(set_hp, char['max_hp']))
+        save_character(user_id, char)
+        msg = f"❤️ **{char_name}** HP set to {char['hp']}/{char['max_hp']}"
+    else:
+        msg = f"❤️ **{char_name}**: {char['hp']}/{char['max_hp']} HP"
+        if char.get('temp_hp', 0) > 0:
+            msg += f" (+{char['temp_hp']} temp)"
+    
+    await interaction.response.send_message(msg)
+
+
+@bot.tree.command(name="deathsave", description="Roll a death saving throw")
+async def death_save_cmd(interaction: discord.Interaction):
+    """Roll a death saving throw when at 0 HP."""
+    user_id = str(interaction.user.id)
+    char = load_character(user_id)
+    
+    if not char:
+        await interaction.response.send_message("Create a character first!", ephemeral=True)
+        return
+    
+    if char['hp'] > 0:
+        await interaction.response.send_message("You're not dying! (HP > 0)", ephemeral=True)
+        return
+    
+    char_name = char.get('name', 'Character')
+    roll = random.randint(1, 20)
+    
+    if roll == 20:
+        # Nat 20 = regain 1 HP
+        char['hp'] = 1
+        char['death_saves'] = {'successes': 0, 'failures': 0}
+        save_character(user_id, char)
+        msg = f"🎲 **{char_name}** rolls a **20**! 🌟 They regain consciousness with 1 HP!"
+    elif roll == 1:
+        # Nat 1 = 2 failures
+        death_save(user_id, False)
+        death_save(user_id, False)
+        char = load_character(user_id)
+        fails = char['death_saves']['failures']
+        msg = f"🎲 **{char_name}** rolls a **1**! 💀 Two death save failures! ({fails}/3 failures)"
+        if fails >= 3:
+            msg += f"\n☠️ **{char_name}** has died..."
+    elif roll >= 10:
+        death_save(user_id, True)
+        char = load_character(user_id)
+        successes = char['death_saves']['successes']
+        msg = f"🎲 **{char_name}** rolls **{roll}**. ✓ Success! ({successes}/3 successes)"
+        if successes >= 3:
+            char['hp'] = 1
+            char['death_saves'] = {'successes': 0, 'failures': 0}
+            save_character(user_id, char)
+            msg += f"\n💚 **{char_name}** stabilizes!"
+    else:
+        death_save(user_id, False)
+        char = load_character(user_id)
+        fails = char['death_saves']['failures']
+        msg = f"🎲 **{char_name}** rolls **{roll}**. ✗ Failure! ({fails}/3 failures)"
+        if fails >= 3:
+            msg += f"\n☠️ **{char_name}** has died..."
+    
+    await interaction.response.send_message(msg)
+
+
+@bot.tree.command(name="rest", description="Take a short or long rest")
+@app_commands.describe(rest_type="Type of rest")
+@app_commands.choices(rest_type=[
+    app_commands.Choice(name="Short Rest (1 hour)", value="short"),
+    app_commands.Choice(name="Long Rest (8 hours)", value="long")
+])
+async def rest_cmd(interaction: discord.Interaction, rest_type: str):
+    """Take a rest to recover HP and abilities."""
+    user_id = str(interaction.user.id)
+    char = load_character(user_id)
+    
+    if not char:
+        await interaction.response.send_message("Create a character first!", ephemeral=True)
+        return
+    
+    char_name = char.get('name', 'Character')
+    old_hp = char['hp']
+    
+    if rest_type == "long":
+        long_rest(user_id)
+        char = load_character(user_id)
+        msg = (
+            f"🌙 **{char_name}** takes a long rest...\n"
+            f"💚 HP restored: {old_hp} → {char['hp']}/{char['max_hp']}\n"
+            f"✨ Spell slots and abilities restored!"
+        )
+    else:
+        # For short rest, use half of available hit dice
+        available = char['level'] - char.get('hit_dice_used', 0)
+        dice_to_use = min(1, available)  # Use 1 hit die by default
+        short_rest(user_id, dice_to_use)
+        char = load_character(user_id)
+        msg = (
+            f"☀️ **{char_name}** takes a short rest...\n"
+            f"💚 HP: {old_hp} → {char['hp']}/{char['max_hp']}"
+        )
+    
+    await interaction.response.send_message(msg)
+
+
+@bot.tree.command(name="inventory", description="View or manage your inventory")
+@app_commands.describe(
+    add="Item to add to inventory",
+    remove="Item to remove from inventory"
+)
+async def inventory_cmd(
+    interaction: discord.Interaction,
+    add: Optional[str] = None,
+    remove: Optional[str] = None
+):
+    """Manage your character's inventory."""
+    user_id = str(interaction.user.id)
+    char = load_character(user_id)
+    
+    if not char:
+        await interaction.response.send_message("Create a character first!", ephemeral=True)
+        return
+    
+    char_name = char.get('name', 'Character')
+    
+    if add:
+        add_inventory(user_id, add)
+        await interaction.response.send_message(f"🎒 **{char_name}** obtained: {add}")
+    elif remove:
+        result = remove_inventory(user_id, remove)
+        if result:
+            await interaction.response.send_message(f"🎒 **{char_name}** dropped: {remove}")
+        else:
+            await interaction.response.send_message(f"❌ {remove} not found in inventory", ephemeral=True)
+    else:
+        # Display inventory
+        char = load_character(user_id)
+        items = char.get('inventory', [])
+        if items:
+            item_list = '\n'.join(f"• {item}" for item in items)
+            msg = f"🎒 **{char_name}'s Inventory:**\n{item_list}"
+        else:
+            msg = f"🎒 **{char_name}'s** inventory is empty."
+        await interaction.response.send_message(msg)
 
 
 # =============================================================================
@@ -544,29 +838,39 @@ async def help_cmd(interaction: discord.Interaction):
 # 🎲 AI Dungeon Master
 
 **Getting Started:**
-1. `/character <name>` - Create your character
-2. `/stats` - Set your ability scores
+1. `/character name:Gandalf char_class:Wizard race:Human`
+2. `/stats strength:14 dexterity:16 ...`
 3. Join a voice channel
 4. `/campaign` - Start an adventure!
 
 **During Play:**
 • `/do <action>` - Describe what you do
-• `/say <speech>` - Speak in character
-• `/roll <dice>` - Roll dice (1d20, 2d6+3, athletics)
+• `/say <speech>` - Speak in character  
+• `/roll <dice>` - Roll dice (1d20, 2d6+3) or skills (athletics, stealth)
 • `/done` - End your turn
 
-**Campaign:**
-• `/status` - View party and campaign info
-• `/recap` - Get a summary of recent events
+**Character:**
+• `/character` - View your character sheet
+• `/stats` - Set ability scores
+• `/hp damage:5` or `/hp heal:10` - Manage HP
+• `/inventory` - View/add/remove items
+• `/rest` - Short or long rest
 
 **Combat:**
-• `/fight <enemies>` - Start combat (e.g., goblin:15:13)
-• `/attack <target> <bonus> <damage>` - Attack!
+• `/fight goblin:15:13 orc:25:14` - Start combat (name:hp:ac)
+• `/attack target:Goblin bonus:5 damage:1d8+3` - Attack!
+• `/combatinfo` - View turn order and HP
+• `/nextturn` - Advance to next combatant
+• `/deathsave` - Roll death saving throw
 • `/endcombat` - End combat
 
+**Campaign:**
+• `/status` - View party info
+• `/recap` - AI summary of recent events
+
 **Settings:**
-• `/voice <on/off>` - Toggle voice narration
-• `/leave` - Disconnect bot from voice
+• `/voice` - Toggle TTS on/off
+• `/leave` - Disconnect from voice
 """
     await interaction.response.send_message(help_text)
 
