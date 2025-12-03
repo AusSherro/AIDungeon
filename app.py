@@ -4,7 +4,7 @@ from services.elevenlabs_service import text_to_speech
 from utils.voice_parser import extract_voice_tag, clean_text
 from utils.voice_map import get_voice_id
 from utils.state_manager import load_state, save_state
-import openai
+from openai import OpenAIError
 import os
 from dotenv import load_dotenv
 import tempfile
@@ -43,7 +43,7 @@ def dm():
     # Get GPT-4o response
     try:
         gpt_response, updated_state = get_dm_response(user_input, state, None)
-    except openai.error.OpenAIError as e:
+    except OpenAIError as e:
         return jsonify({'error': f'OpenAI API error: {e}'}), 500
 
     # Extract voice tag and clean text
@@ -65,6 +65,68 @@ def dm():
     response.headers['X-Text'] = text
     response.headers['X-Voice-Tag'] = voice_tag or 'Narrator'
     return response
+
+
+@app.route('/api/generate', methods=['POST'])
+def api_generate():
+    """
+    Generate AI text response without TTS.
+    
+    Accepts JSON payload with:
+    - prompt: the player's input or narration seed
+    - action_type: how to treat the prompt (do, say, story, continue)
+    - genre (optional): e.g. sci-fi, horror, fantasy
+    - context (optional): array of prior messages for additional history
+    """
+    data = request.get_json(silent=True) or {}
+    
+    prompt = data.get('prompt')
+    action_type = data.get('action_type', 'do')
+    genre = data.get('genre', 'fantasy')
+    context = data.get('context', [])
+    
+    if not isinstance(prompt, str) or not prompt.strip():
+        return jsonify({'error': 'Missing or malformed prompt'}), 400
+    
+    # Build action prefix based on action_type
+    action_prefixes = {
+        'do': 'You ',
+        'say': 'You say: ',
+        'story': '',
+        'continue': 'Continue the story: '
+    }
+    prefix = action_prefixes.get(action_type, '')
+    formatted_prompt = f"{prefix}{prompt}"
+    
+    # Build state with context
+    state = {
+        'prompt_history': [{"role": "user", "content": msg} for msg in context] if context else [],
+        'genre': genre
+    }
+    
+    # Build a genre-aware system prompt
+    system_prompt = (
+        f"You are a Dungeon Master AI running a {genre} adventure. "
+        "Respond to player actions with immersive narration and character dialogue. "
+        "Label all character speech with [Voice: Character Name] tags. "
+        "Narration should be labeled [Voice: Narrator] or left untagged. "
+        "Keep track of the story, locations, and NPCs."
+    )
+    
+    try:
+        gpt_response, updated_state = get_dm_response(formatted_prompt, state, None, system_prompt)
+    except OpenAIError as e:
+        return jsonify({'error': f'OpenAI API error: {e}'}), 500
+    
+    # Clean the response text
+    text = clean_text(gpt_response)
+    
+    return jsonify({
+        'text': text,
+        'raw': gpt_response,
+        'action_type': action_type,
+        'genre': genre
+    })
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

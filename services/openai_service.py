@@ -1,10 +1,10 @@
-import openai
 import os
 import re
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
-openai.api_key = os.getenv('OPENAI_API_KEY')
+client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 ROLL_PATTERN = re.compile(r'roll (?:a |an )?(\d*d\d+|d20)', re.IGNORECASE)
 # Support "DC 15" or "need 15 or higher" styles
@@ -78,13 +78,13 @@ def get_dm_response(user_input, state, player_id=None, system_prompt=None):
     messages.append({"role": "user", "content": user_input})
     
     try:
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "system", "content": system_prompt or DEFAULT_SYSTEM_PROMPT}] + messages,
             max_tokens=500,
             temperature=0.9
         )
-        reply = response.choices[0].message['content']
+        reply = response.choices[0].message.content
     except Exception as e:
         print(f"OpenAI API Error: {e}")
         reply = "The mystical energies are disrupted... please try again."
@@ -118,7 +118,7 @@ def generate_campaign(state, prompt=None):
     user_input = prompt if prompt else "Begin a new adventure"
     
     try:
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -127,7 +127,7 @@ def generate_campaign(state, prompt=None):
             max_tokens=500,
             temperature=0.8
         )
-        campaign_text = response.choices[0].message['content']
+        campaign_text = response.choices[0].message.content
     except Exception as e:
         print(f"OpenAI API Error: {e}")
         campaign_text = "{\"campaign_title\": \"Untitled Adventure\", \"realm\": \"Unknown Realm\", \"plot_hook\": \"\", \"location\": \"Nowhere\", \"intro\": \"A mysterious adventure awaits...\"}"
@@ -174,13 +174,13 @@ def summarize_history(state, max_entries=10):
     messages.extend(history)
 
     try:
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4o",
             messages=messages,
             max_tokens=150,
             temperature=0.7,
         )
-        return response.choices[0].message['content']
+        return response.choices[0].message.content
     except Exception as e:
         print(f"OpenAI Recap Error: {e}")
         return "Previously on your adventure..."
