@@ -103,6 +103,31 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 | `/help` | Show all commands |
 | `/exportlog` | Export session log |
 
+### Tactical Maps
+| Command | Description |
+|---------|-------------|
+| `/newmap` | Create a new battle map (dungeon, forest, tavern, cave) |
+| `/map` | View the current tactical map |
+| `/addtoken` | Add a character/enemy token to the map |
+| `/movetoken` | Move a token to a new position |
+| `/removetoken` | Remove a token from the map |
+| `/distance` | Measure distance between two tokens |
+| `/inrange` | Find all tokens within range |
+| `/setterrain` | Set terrain at a position |
+| `/clearmap` | Delete the current map |
+
+### Handouts & Secrets
+| Command | Description |
+|---------|-------------|
+| `/handout` | Create a handout (note, letter, map, etc.) |
+| `/secret` | Send a secret message to one player |
+| `/viewhandouts` | View handouts shared with you |
+| `/readhandout` | Read a specific handout |
+| `/mysecrets` | View secret messages for you |
+| `/dmhandouts` | [DM] View all campaign handouts |
+| `/revealhandout` | [DM] Reveal handout to all |
+| `/sharehandout` | [DM] Share with specific player |
+
 ---
 
 ## 🎲 D&D 5e Data System
@@ -161,7 +186,55 @@ Each includes: AC, HP, stats, actions, traits, legendary actions (where applicab
 
 ---
 
-## 🔊 Voice Options (TTS)
+## �️ Tactical Maps
+
+Grid-based battle maps for tactical combat positioning:
+
+### Map Templates
+- **Dungeon Room** - Walled room with door
+- **Forest Clearing** - Trees and bushes around edges
+- **Tavern** - Bar counter, tables, stairs
+- **Cave** - Irregular walls with rubble and pits
+
+### Terrain Types
+| Symbol | Terrain | Effect |
+|--------|---------|--------|
+| `.` | Floor | Normal movement |
+| `#` | Wall | Impassable |
+| `~` | Water | Difficult terrain |
+| `:` | Difficult | Half movement |
+| `+` | Door | Passable |
+| `X` | Locked Door | Impassable until unlocked |
+| `O` | Pillar | Impassable, half cover |
+| `T` | Tree | Impassable, half cover |
+| `^` | Rubble | Difficult, half cover |
+
+### Token Types
+- 🔵 **Player** - Player characters
+- 🔴 **Enemy** - Hostile creatures
+- 🟢 **NPC** - Non-player characters
+- 🟣 **Boss** - Boss monsters
+- ⬜ **Object** - Items and objects
+
+---
+
+## 📜 Handouts & Secrets
+
+Share information with players during the game:
+
+### Handout Types
+- 📝 Note, ✉️ Letter, 🗺️ Map, 🖼️ Image
+- 📦 Item Description, 📚 Lore, 🔍 Clue, 📖 Journal Entry
+
+### Features
+- **Public Handouts** - Visible to all players
+- **Private Handouts** - Shared with specific players only
+- **Secrets** - DM can send hidden messages to individual players
+- **Image Support** - Attach image URLs to handouts
+
+---
+
+## �🔊 Voice Options (TTS)
 
 The bot supports multiple TTS providers to fit your needs:
 
@@ -260,10 +333,20 @@ Access `http://localhost:5000/portal/` when the Flask app is running:
 
 ## 🗃️ State Persistence
 
-- Game state is saved per Discord channel in `state/` as JSON
-- Character data is saved per Discord user ID in `characters/`
-- Combat encounters are saved in `combat/`
-- Session logs are saved in `logs/` as Markdown
+Data can be stored in two formats:
+
+### JSON Files (Default)
+- Game state saved per Discord channel in `state/`
+- Character data saved per user ID in `characters/`
+- Combat encounters in `combat/`
+- Handouts in `handouts/`
+- Maps in `maps/`
+- Session logs in `logs/`
+
+### SQLite Database (Optional)
+- All data in `data/aidm.db`
+- Better querying and relationships
+- Run migration: `python -c "from utils.database import migrate_json_to_db; migrate_json_to_db()"`
 
 ---
 
@@ -271,7 +354,7 @@ Access `http://localhost:5000/portal/` when the Flask app is running:
 ```
 ai-dm-voice/
 ├── app.py                 # Flask REST API & web portal
-├── discord_bot.py         # Main Discord bot (30+ commands)
+├── discord_bot.py         # Main Discord bot (40+ commands)
 ├── config.py              # Configuration management
 ├── services/
 │   ├── openai_service.py  # GPT-4o + skill check detection + memory
@@ -282,15 +365,21 @@ ai-dm-voice/
 │   ├── dice_roller.py         # Dice notation parser
 │   ├── state_manager.py       # Campaign state + memory system
 │   ├── dnd5e_data.py          # Full D&D 5e SRD data
+│   ├── handout_manager.py     # Handouts and secrets
+│   ├── map_manager.py         # Tactical battle maps
+│   ├── database.py            # SQLite storage layer
 │   ├── voice_map.py           # Voice ID mapping
 │   └── voice_parser.py        # Voice tag extraction + TTS cleanup
 ├── webportal/
 │   ├── routes.py              # Flask routes
 │   └── templates/             # HTML templates
-├── state/                 # Game state (per channel)
-├── characters/            # Player character data
-├── combat/                # Combat encounter data
+├── state/                 # Campaign state (JSON)
+├── characters/            # Player characters (JSON)
+├── combat/                # Combat encounters
+├── handouts/              # Handouts and secrets
+├── maps/                  # Tactical maps
 ├── logs/                  # Session transcripts
+├── data/                  # SQLite database
 ├── .env.example           # Environment template
 └── requirements.txt       # Dependencies
 ```

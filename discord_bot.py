@@ -73,6 +73,17 @@ from utils.combat_manager import (
     get_active_combatant, end_combat, attack,
     get_combat_status, load_combat
 )
+from utils.handout_manager import (
+    create_handout, get_handout, get_handouts_for_player,
+    get_all_handouts, reveal_handout, share_handout_with,
+    mark_as_read, delete_handout, add_player_secret,
+    get_player_secrets, get_unread_secrets, mark_secret_read,
+    HANDOUT_TYPES, get_handout_emoji, format_handout_display
+)
+from utils.map_manager import (
+    TacticalMap, Token, load_map, save_map, delete_map,
+    create_from_template, TERRAIN_TYPES, TOKEN_SYMBOLS, MAP_TEMPLATES
+)
 
 load_dotenv()
 Config.validate()
@@ -1287,6 +1298,676 @@ async def levelup_cmd(
 
 
 # =============================================================================
+# HANDOUT COMMANDS (DM Tools)
+# =============================================================================
+
+HANDOUT_TYPE_CHOICES = [
+    app_commands.Choice(name="📝 Note", value="note"),
+    app_commands.Choice(name="✉️ Letter", value="letter"),
+    app_commands.Choice(name="🗺️ Map", value="map"),
+    app_commands.Choice(name="🖼️ Image", value="image"),
+    app_commands.Choice(name="📦 Item Description", value="item"),
+    app_commands.Choice(name="📚 Lore", value="lore"),
+    app_commands.Choice(name="🔍 Clue", value="clue"),
+    app_commands.Choice(name="📖 Journal Entry", value="journal"),
+]
+
+@bot.tree.command(name="handout", description="Create a handout to share with players")
+@app_commands.describe(
+    title="Title of the handout",
+    content="Text content of the handout",
+    handout_type="Type of handout",
+    image_url="URL to an image (optional)",
+    player="Share only with this player (optional, leave blank for all)"
+)
+@app_commands.choices(handout_type=HANDOUT_TYPE_CHOICES)
+async def handout_cmd(
+    interaction: discord.Interaction,
+    title: str,
+    content: str,
+    handout_type: str = "note",
+    image_url: Optional[str] = None,
+    player: Optional[discord.Member] = None
+):
+    """Create and share a handout with players."""
+    channel_id = str(interaction.channel.id)
+    
+    # Determine visibility
+    visible_to = [str(player.id)] if player else None
+    
+    handout = create_handout(
+        channel_id=channel_id,
+        title=title,
+        content=content,
+        handout_type=handout_type,
+        image_url=image_url,
+        visible_to=visible_to,
+        created_by=str(interaction.user.id)
+    )
+    
+    emoji = get_handout_emoji(handout_type)
+    
+    if player:
+        # Private handout - send to DM and notify player
+        await interaction.response.send_message(
+            f"{emoji} **Handout created for {player.display_name}:**\n"
+            f"*{title}*\n\n"
+            f"They can view it with `/viewhandouts`",
+            ephemeral=True
+        )
+        
+        # DM the player about the new handout
+        try:
+            await player.send(
+                f"{emoji} **New Handout: {title}**\n"
+                f"───────────────────────\n"
+                f"{content}\n"
+                + (f"\n🖼️ {image_url}" if image_url else "")
+            )
+        except:
+            # Can't DM player, they'll see it with /viewhandouts
+            pass
+    else:
+        # Public handout - share with everyone
+        output = (
+            f"{emoji} **{title}**\n"
+            f"───────────────────────\n"
+            f"{content}"
+        )
+        if image_url:
+            output += f"\n\n🖼️ {image_url}"
+        
+        await interaction.response.send_message(output)
+
+
+@bot.tree.command(name="secret", description="Send a secret message to a specific player")
+@app_commands.describe(
+    player="The player to receive the secret",
+    message="The secret message (only they will see it)",
+    title="Optional title for the secret"
+)
+async def secret_cmd(
+    interaction: discord.Interaction,
+    player: discord.Member,
+    message: str,
+    title: Optional[str] = None
+):
+    """Send a secret message only visible to one player."""
+    channel_id = str(interaction.channel.id)
+    player_id = str(player.id)
+    
+    # Add the secret
+    secret = add_player_secret(channel_id, player_id, message, title)
+    
+    # Confirm to DM
+    await interaction.response.send_message(
+        f"🤫 Secret sent to **{player.display_name}**:\n"
+        f"*\"{message[:50]}{'...' if len(message) > 50 else ''}\"*",
+        ephemeral=True
+    )
+    
+    # Try to DM the player
+    try:
+        char = load_character(player_id)
+        char_name = char.get('name', player.display_name) if char else player.display_name
+        
+        await player.send(
+            f"🤫 **Secret for {char_name}:**\n"
+            f"───────────────────────\n"
+            f"{message}\n\n"
+            f"*Only you can see this message.*"
+        )
+    except:
+        # Can't DM, they'll see it with /mysecrets
+        pass
+
+
+@bot.tree.command(name="viewhandouts", description="View handouts shared with you")
+async def viewhandouts_cmd(interaction: discord.Interaction):
+    """View all handouts visible to you."""
+    channel_id = str(interaction.channel.id)
+    player_id = str(interaction.user.id)
+    
+    handouts = get_handouts_for_player(channel_id, player_id)
+    
+    if not handouts:
+        await interaction.response.send_message(
+            "📜 No handouts available yet.\n"
+            "*The DM can create handouts with `/handout`*",
+            ephemeral=True
+        )
+        return
+    
+    # Mark all as read
+    for h in handouts:
+        mark_as_read(channel_id, h["id"], player_id)
+    
+    # Format handout list
+    output = "# 📜 Your Handouts\n\n"
+    
+    for handout in handouts:
+        emoji = get_handout_emoji(handout["type"])
+        output += f"{emoji} **{handout['title']}** (ID: {handout['id']})\n"
+        # Show preview of content
+        preview = handout["content"][:100]
+        if len(handout["content"]) > 100:
+            preview += "..."
+        output += f"*{preview}*\n\n"
+    
+    output += "*Use `/readhandout <id>` to view the full handout*"
+    
+    await interaction.response.send_message(output, ephemeral=True)
+
+
+@bot.tree.command(name="readhandout", description="Read a specific handout")
+@app_commands.describe(handout_id="The ID of the handout to read")
+async def readhandout_cmd(interaction: discord.Interaction, handout_id: int):
+    """Read the full content of a specific handout."""
+    channel_id = str(interaction.channel.id)
+    player_id = str(interaction.user.id)
+    
+    # Get handouts visible to this player
+    visible_handouts = get_handouts_for_player(channel_id, player_id)
+    handout = None
+    
+    for h in visible_handouts:
+        if h["id"] == handout_id:
+            handout = h
+            break
+    
+    if not handout:
+        await interaction.response.send_message(
+            "❌ Handout not found or you don't have access to it.",
+            ephemeral=True
+        )
+        return
+    
+    # Mark as read
+    mark_as_read(channel_id, handout_id, player_id)
+    
+    # Format and display
+    output = format_handout_display(handout)
+    
+    if handout.get("image_url"):
+        output += f"\n\n🖼️ {handout['image_url']}"
+    
+    await interaction.response.send_message(output, ephemeral=True)
+
+
+@bot.tree.command(name="mysecrets", description="View secrets shared with you")
+async def mysecrets_cmd(interaction: discord.Interaction):
+    """View all secret messages sent to you."""
+    channel_id = str(interaction.channel.id)
+    player_id = str(interaction.user.id)
+    
+    secrets = get_player_secrets(channel_id, player_id)
+    
+    if not secrets:
+        await interaction.response.send_message(
+            "🤫 No secrets for you... yet.\n"
+            "*The DM may share secrets with you during the game.*",
+            ephemeral=True
+        )
+        return
+    
+    # Mark all as read
+    for s in secrets:
+        mark_secret_read(channel_id, player_id, s["id"])
+    
+    output = "# 🤫 Your Secrets\n\n"
+    
+    for secret in secrets:
+        title = secret.get("title", "Secret")
+        output += f"**{title}:**\n"
+        output += f"*{secret['content']}*\n\n"
+    
+    output += "*Only you can see these messages.*"
+    
+    await interaction.response.send_message(output, ephemeral=True)
+
+
+@bot.tree.command(name="dmhandouts", description="[DM] View all handouts in this campaign")
+async def dmhandouts_cmd(interaction: discord.Interaction):
+    """View all handouts (DM only view with visibility info)."""
+    channel_id = str(interaction.channel.id)
+    
+    handouts = get_all_handouts(channel_id)
+    
+    if not handouts:
+        await interaction.response.send_message(
+            "📜 No handouts created yet.\n"
+            "Use `/handout` to create one!",
+            ephemeral=True
+        )
+        return
+    
+    output = "# 📜 All Campaign Handouts\n\n"
+    
+    for handout in handouts:
+        emoji = get_handout_emoji(handout["type"])
+        
+        # Visibility info
+        if handout["visible_to"] is None:
+            visibility = "👁️ Everyone"
+        else:
+            count = len(handout["visible_to"])
+            visibility = f"🔒 {count} player(s)"
+        
+        # Read status
+        read_count = len(handout.get("read_by", []))
+        
+        output += (
+            f"{emoji} **{handout['title']}** (ID: {handout['id']})\n"
+            f"   Type: {handout['type']} | {visibility} | Read by: {read_count}\n\n"
+        )
+    
+    output += (
+        "───────────────────────\n"
+        "**Commands:**\n"
+        "• `/handout` - Create new handout\n"
+        "• `/revealhandout <id>` - Reveal to all players\n"
+        "• `/sharehandout <id> <player>` - Share with specific player\n"
+        "• `/deletehandout <id>` - Delete a handout"
+    )
+    
+    await interaction.response.send_message(output, ephemeral=True)
+
+
+@bot.tree.command(name="revealhandout", description="[DM] Reveal a handout to all players")
+@app_commands.describe(handout_id="The ID of the handout to reveal")
+async def revealhandout_cmd(interaction: discord.Interaction, handout_id: int):
+    """Reveal a previously private handout to all players."""
+    channel_id = str(interaction.channel.id)
+    
+    handout = reveal_handout(channel_id, handout_id)
+    
+    if not handout:
+        await interaction.response.send_message(
+            "❌ Handout not found.",
+            ephemeral=True
+        )
+        return
+    
+    # Show the handout to everyone
+    output = format_handout_display(handout)
+    
+    if handout.get("image_url"):
+        output += f"\n\n🖼️ {handout['image_url']}"
+    
+    await interaction.response.send_message(
+        f"📜 **The DM reveals a handout!**\n\n{output}"
+    )
+
+
+@bot.tree.command(name="sharehandout", description="[DM] Share a handout with a specific player")
+@app_commands.describe(
+    handout_id="The ID of the handout",
+    player="The player to share with"
+)
+async def sharehandout_cmd(
+    interaction: discord.Interaction,
+    handout_id: int,
+    player: discord.Member
+):
+    """Share a handout with a specific player."""
+    channel_id = str(interaction.channel.id)
+    
+    handout = share_handout_with(channel_id, handout_id, [str(player.id)])
+    
+    if not handout:
+        await interaction.response.send_message(
+            "❌ Handout not found.",
+            ephemeral=True
+        )
+        return
+    
+    await interaction.response.send_message(
+        f"📜 Shared **{handout['title']}** with {player.display_name}",
+        ephemeral=True
+    )
+    
+    # Try to notify the player
+    try:
+        emoji = get_handout_emoji(handout["type"])
+        await player.send(
+            f"{emoji} **New Handout: {handout['title']}**\n"
+            f"───────────────────────\n"
+            f"{handout['content']}\n"
+            + (f"\n🖼️ {handout['image_url']}" if handout.get('image_url') else "")
+        )
+    except:
+        pass
+
+
+@bot.tree.command(name="deletehandout", description="[DM] Delete a handout")
+@app_commands.describe(handout_id="The ID of the handout to delete")
+async def deletehandout_cmd(interaction: discord.Interaction, handout_id: int):
+    """Delete a handout permanently."""
+    channel_id = str(interaction.channel.id)
+    
+    if delete_handout(channel_id, handout_id):
+        await interaction.response.send_message(
+            f"🗑️ Handout #{handout_id} deleted.",
+            ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            "❌ Handout not found.",
+            ephemeral=True
+        )
+
+
+# =============================================================================
+# TACTICAL MAP COMMANDS
+# =============================================================================
+
+MAP_TEMPLATE_CHOICES = [
+    app_commands.Choice(name="🏰 Dungeon Room", value="dungeon"),
+    app_commands.Choice(name="🌲 Forest Clearing", value="forest"),
+    app_commands.Choice(name="🍺 Tavern", value="tavern"),
+    app_commands.Choice(name="🕳️ Cave", value="cave"),
+]
+
+@bot.tree.command(name="map", description="View the current tactical map")
+async def map_cmd(interaction: discord.Interaction):
+    """Display the current tactical map."""
+    channel_id = str(interaction.channel.id)
+    
+    map_obj = load_map(channel_id)
+    if not map_obj:
+        await interaction.response.send_message(
+            "🗺️ No map active.\n"
+            "Use `/newmap` to create one!",
+            ephemeral=True
+        )
+        return
+    
+    await interaction.response.send_message(map_obj.render_discord())
+
+
+@bot.tree.command(name="newmap", description="Create a new tactical map")
+@app_commands.describe(
+    template="Map template to use",
+    width="Map width in squares (5-30)",
+    height="Map height in squares (5-25)",
+    name="Name of the map"
+)
+@app_commands.choices(template=MAP_TEMPLATE_CHOICES)
+async def newmap_cmd(
+    interaction: discord.Interaction,
+    template: str = "dungeon",
+    width: int = 20,
+    height: int = 15,
+    name: str = "Battle Map"
+):
+    """Create a new tactical battle map."""
+    channel_id = str(interaction.channel.id)
+    
+    # Clamp dimensions
+    width = max(5, min(30, width))
+    height = max(5, min(25, height))
+    
+    # Create from template
+    map_obj = create_from_template(template, width=width, height=height, name=name)
+    if not map_obj:
+        map_obj = TacticalMap(width, height, name)
+    
+    save_map(channel_id, map_obj)
+    
+    await interaction.response.send_message(
+        f"🗺️ **New map created!**\n\n{map_obj.render_discord()}"
+    )
+
+
+@bot.tree.command(name="addtoken", description="Add a token to the map")
+@app_commands.describe(
+    name="Name of the character/creature",
+    x="X position (column)",
+    y="Y position (row)",
+    token_type="Type of token"
+)
+@app_commands.choices(token_type=[
+    app_commands.Choice(name="🔵 Player", value="player"),
+    app_commands.Choice(name="🔴 Enemy", value="enemy"),
+    app_commands.Choice(name="🟢 NPC", value="npc"),
+    app_commands.Choice(name="🟣 Boss", value="boss"),
+    app_commands.Choice(name="⬜ Object", value="object"),
+])
+async def addtoken_cmd(
+    interaction: discord.Interaction,
+    name: str,
+    x: int,
+    y: int,
+    token_type: str = "player"
+):
+    """Add a token to the tactical map."""
+    channel_id = str(interaction.channel.id)
+    
+    map_obj = load_map(channel_id)
+    if not map_obj:
+        await interaction.response.send_message(
+            "No map active. Use `/newmap` first!",
+            ephemeral=True
+        )
+        return
+    
+    token = map_obj.add_token(name, x, y, token_type)
+    if not token:
+        await interaction.response.send_message(
+            f"❌ Position ({x},{y}) is out of bounds!",
+            ephemeral=True
+        )
+        return
+    
+    save_map(channel_id, map_obj)
+    
+    emoji = TOKEN_SYMBOLS.get(token_type, TOKEN_SYMBOLS["player"])["color"]
+    await interaction.response.send_message(
+        f"{emoji} **{name}** placed at ({x},{y})\n\n{map_obj.render_discord()}"
+    )
+
+
+@bot.tree.command(name="movetoken", description="Move a token on the map")
+@app_commands.describe(
+    name="Name of the token to move",
+    x="New X position",
+    y="New Y position"
+)
+async def movetoken_cmd(
+    interaction: discord.Interaction,
+    name: str,
+    x: int,
+    y: int
+):
+    """Move a token to a new position."""
+    channel_id = str(interaction.channel.id)
+    
+    map_obj = load_map(channel_id)
+    if not map_obj:
+        await interaction.response.send_message(
+            "No map active.",
+            ephemeral=True
+        )
+        return
+    
+    old_pos = map_obj.move_token(name, x, y)
+    if old_pos is None:
+        await interaction.response.send_message(
+            f"❌ Token '{name}' not found or position out of bounds!",
+            ephemeral=True
+        )
+        return
+    
+    save_map(channel_id, map_obj)
+    
+    # Calculate distance moved
+    distance = max(abs(x - old_pos[0]), abs(y - old_pos[1])) * map_obj.scale
+    
+    await interaction.response.send_message(
+        f"🏃 **{name}** moved from ({old_pos[0]},{old_pos[1]}) to ({x},{y}) [{distance}ft]\n\n"
+        f"{map_obj.render_discord()}"
+    )
+
+
+@bot.tree.command(name="removetoken", description="Remove a token from the map")
+@app_commands.describe(name="Name of the token to remove")
+async def removetoken_cmd(interaction: discord.Interaction, name: str):
+    """Remove a token from the map."""
+    channel_id = str(interaction.channel.id)
+    
+    map_obj = load_map(channel_id)
+    if not map_obj:
+        await interaction.response.send_message("No map active.", ephemeral=True)
+        return
+    
+    if map_obj.remove_token(name):
+        save_map(channel_id, map_obj)
+        await interaction.response.send_message(
+            f"🗑️ **{name}** removed from the map.\n\n{map_obj.render_discord()}"
+        )
+    else:
+        await interaction.response.send_message(
+            f"❌ Token '{name}' not found.",
+            ephemeral=True
+        )
+
+
+@bot.tree.command(name="distance", description="Measure distance between two tokens")
+@app_commands.describe(
+    token1="First token name",
+    token2="Second token name"
+)
+async def distance_cmd(
+    interaction: discord.Interaction,
+    token1: str,
+    token2: str
+):
+    """Measure the distance between two tokens in feet."""
+    channel_id = str(interaction.channel.id)
+    
+    map_obj = load_map(channel_id)
+    if not map_obj:
+        await interaction.response.send_message("No map active.", ephemeral=True)
+        return
+    
+    distance = map_obj.get_distance(token1, token2)
+    if distance is None:
+        await interaction.response.send_message(
+            "❌ One or both tokens not found.",
+            ephemeral=True
+        )
+        return
+    
+    t1 = map_obj.get_token(token1)
+    t2 = map_obj.get_token(token2)
+    
+    await interaction.response.send_message(
+        f"📏 Distance from **{token1}** ({t1.x},{t1.y}) to **{token2}** ({t2.x},{t2.y}): **{distance} feet**"
+    )
+
+
+@bot.tree.command(name="inrange", description="Find all tokens within range of a target")
+@app_commands.describe(
+    name="Token to check from",
+    range_feet="Range in feet"
+)
+async def inrange_cmd(
+    interaction: discord.Interaction,
+    name: str,
+    range_feet: int = 30
+):
+    """Find all tokens within a certain range."""
+    channel_id = str(interaction.channel.id)
+    
+    map_obj = load_map(channel_id)
+    if not map_obj:
+        await interaction.response.send_message("No map active.", ephemeral=True)
+        return
+    
+    center = map_obj.get_token(name)
+    if not center:
+        await interaction.response.send_message(
+            f"❌ Token '{name}' not found.",
+            ephemeral=True
+        )
+        return
+    
+    in_range = map_obj.get_tokens_in_range(name, range_feet)
+    
+    if not in_range:
+        await interaction.response.send_message(
+            f"📏 No tokens within {range_feet}ft of **{name}**"
+        )
+        return
+    
+    token_list = []
+    for token in in_range:
+        dist = map_obj.get_distance(name, token.name)
+        emoji = TOKEN_SYMBOLS.get(token.token_type, TOKEN_SYMBOLS["player"])["color"]
+        token_list.append(f"{emoji} **{token.name}** - {dist}ft")
+    
+    await interaction.response.send_message(
+        f"📏 Tokens within {range_feet}ft of **{name}**:\n" +
+        "\n".join(token_list)
+    )
+
+
+@bot.tree.command(name="setterrain", description="Set terrain at a position")
+@app_commands.describe(
+    x="X position",
+    y="Y position",
+    terrain="Terrain type"
+)
+@app_commands.choices(terrain=[
+    app_commands.Choice(name=". Floor", value="floor"),
+    app_commands.Choice(name="# Wall", value="wall"),
+    app_commands.Choice(name="~ Water", value="water"),
+    app_commands.Choice(name=": Difficult Terrain", value="difficult"),
+    app_commands.Choice(name="+ Door", value="door"),
+    app_commands.Choice(name="X Locked Door", value="door_locked"),
+    app_commands.Choice(name="O Pillar", value="pillar"),
+    app_commands.Choice(name="T Tree", value="tree"),
+    app_commands.Choice(name="^ Rubble", value="rubble"),
+])
+async def setterrain_cmd(
+    interaction: discord.Interaction,
+    x: int,
+    y: int,
+    terrain: str
+):
+    """Set the terrain at a specific position."""
+    channel_id = str(interaction.channel.id)
+    
+    map_obj = load_map(channel_id)
+    if not map_obj:
+        await interaction.response.send_message("No map active.", ephemeral=True)
+        return
+    
+    if map_obj.set_terrain(x, y, terrain):
+        save_map(channel_id, map_obj)
+        terrain_name = TERRAIN_TYPES.get(terrain, {}).get("name", terrain)
+        await interaction.response.send_message(
+            f"🗺️ Set ({x},{y}) to **{terrain_name}**\n\n{map_obj.render_discord()}"
+        )
+    else:
+        await interaction.response.send_message(
+            f"❌ Position ({x},{y}) is out of bounds!",
+            ephemeral=True
+        )
+
+
+@bot.tree.command(name="clearmap", description="Delete the current map")
+async def clearmap_cmd(interaction: discord.Interaction):
+    """Delete the current tactical map."""
+    channel_id = str(interaction.channel.id)
+    
+    if delete_map(channel_id):
+        await interaction.response.send_message("🗑️ Map deleted.")
+    else:
+        await interaction.response.send_message("No map to delete.", ephemeral=True)
+
+
+# =============================================================================
 # SETTINGS COMMANDS
 # =============================================================================
 
@@ -1375,6 +2056,24 @@ async def help_cmd(interaction: discord.Interaction):
 • `/nextturn` - Advance to next combatant
 • `/deathsave` - Roll death saving throw
 • `/endcombat` - End combat
+
+**Tactical Maps:**
+• `/newmap` - Create a new battle map
+• `/map` - View the current map
+• `/addtoken` - Add character/enemy to map
+• `/movetoken` - Move a token
+• `/distance` - Measure distance between tokens
+• `/inrange` - Find tokens in range
+
+**Handouts & Secrets:**
+• `/viewhandouts` - View handouts shared with you
+• `/readhandout <id>` - Read a specific handout
+• `/mysecrets` - View secret messages for you
+
+**DM Tools:**
+• `/handout` - Create a new handout
+• `/secret` - Send secret to one player
+• `/dmhandouts` - View all handouts
 
 **Campaign Memory:**
 • `/status` - View party info
