@@ -1,6 +1,6 @@
 # AI Dungeon Master
 
-A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (with free Edge TTS fallback), designed for Discord with persistent campaign state and long-term memory.
+A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (with free Edge TTS fallback), designed for Discord with persistent campaign state, long-term memory, and comprehensive D&D 5e mechanics.
 
 ---
 
@@ -58,11 +58,28 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 | `/inventory [add/remove]` | Manage inventory |
 | `/rest short/long` | Take a rest |
 | `/deathsave` | Roll death saving throw |
+| `/levelup` | Level up your character |
+
+### Spellcasting
+| Command | Description |
+|---------|-------------|
+| `/spells` | View known spells and spell slots |
+| `/cast <spell> [slot_level]` | Cast a spell (uses spell slot) |
+| `/prepare <spell>` | Prepare a spell for casting |
+| `/learn <spell>` | Learn a new spell |
+
+### Equipment
+| Command | Description |
+|---------|-------------|
+| `/equip <item>` | Equip a weapon, armor, or shield |
+| `/unequip <slot>` | Unequip from weapon/armor/shield slot |
+| `/gear` | View equipped items and AC |
 
 ### Combat
 | Command | Description |
 |---------|-------------|
-| `/fight goblin:15:13 orc:25:14` | Start combat (name:hp:ac) |
+| `/fight goblin*3 orc` | Start combat with monsters from database |
+| `/fight goblin:15:13 orc:25:14` | Start combat (name:hp:ac for custom) |
 | `/attack target:Goblin bonus:5 damage:1d8+3` | Attack a target |
 | `/combatinfo` | View turn order and HP |
 | `/nextturn` | Advance to next combatant |
@@ -88,7 +105,63 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 
 ---
 
-## � Voice Options (TTS)
+## 🎲 D&D 5e Data System
+
+The bot includes comprehensive D&D 5e SRD data for authentic gameplay:
+
+### Classes (12)
+All PHB classes with full progression tables:
+- Barbarian, Bard, Cleric, Druid, Fighter, Monk
+- Paladin, Ranger, Rogue, Sorcerer, Warlock, Wizard
+
+Each class includes: hit dice, saving throws, proficiencies, spell slots, and features by level.
+
+### Races (9)
+- Dwarf (Hill/Mountain), Elf (High/Wood/Dark), Halfling (Lightfoot/Stout)
+- Human, Dragonborn, Gnome (Forest/Rock), Half-Elf, Half-Orc, Tiefling
+
+Each race includes: ability bonuses, traits, speed, languages, and proficiencies.
+
+### Spells (100+)
+Full spell database organized by class and level:
+- Cantrips through 9th level
+- School, casting time, range, components, duration
+- Ritual and concentration tags
+
+### Equipment
+**37 Weapons** with full stats:
+- Simple/Martial, Melee/Ranged
+- Damage dice, damage types, properties (finesse, heavy, two-handed, etc.)
+
+**13 Armor Types:**
+- Light (Leather, Studded), Medium (Chain Shirt, Breastplate), Heavy (Chain Mail, Plate)
+- AC calculations, DEX caps, stealth disadvantage, strength requirements
+
+### Feats (40)
+Popular feats with full effects:
+- Great Weapon Master, Sharpshooter, Sentinel, Polearm Master
+- Lucky, Alert, Mobile, War Caster, and more
+- Prerequisite checking included
+
+### Conditions (16)
+All conditions with mechanical effects:
+- Blinded, Charmed, Frightened, Grappled, Incapacitated
+- Invisible, Paralyzed, Petrified, Poisoned, Prone
+- Restrained, Stunned, Unconscious, Exhaustion (6 levels)
+
+### Monsters (15+)
+Pre-built statblocks for quick encounters:
+- **CR 1/8-1/4:** Kobold, Goblin, Skeleton, Zombie
+- **CR 1/2:** Orc, Hobgoblin
+- **CR 1:** Bugbear, Dire Wolf, Ghoul, Goblin Boss
+- **CR 2-5:** Ogre, Werewolf, Troll, Orc War Chief
+- **CR 8:** Young Green Dragon
+
+Each includes: AC, HP, stats, actions, traits, legendary actions (where applicable).
+
+---
+
+## 🔊 Voice Options (TTS)
 
 The bot supports multiple TTS providers to fit your needs:
 
@@ -125,30 +198,50 @@ The AI remembers your adventure through a layered memory system:
 
 ---
 
-## 🎲 Skill Checks & Roll Flow
+## ⚔️ Combat System
 
-The AI follows D&D 5e rules for skill checks:
+### Starting Combat
+```
+/fight goblin*3 orc      # 3 goblins + 1 orc from monster database
+/fight custom:20:15      # Custom enemy with 20 HP, 15 AC
+```
 
-1. You describe an action with `/do I try to pick the lock`
-2. AI asks for a roll: *"Make a Dexterity (Sleight of Hand) check, DC 15"*
-3. Use `/roll sleight_of_hand` - the bot auto-applies your modifiers
-4. AI narrates the outcome based on success/failure
+### Combat Features
+- **Auto-Initiative** using DEX modifiers
+- **Monster Statblocks** with full actions and traits
+- **Legendary Actions** for boss monsters (resets each round)
+- **Legendary Resistance** to auto-succeed saves
+- **Lair Actions** at initiative count 20
+- **Damage Types** with resistance/immunity/vulnerability
+- **Regeneration** (blocked by fire/acid)
+- **Readied Actions** with trigger conditions
+- **Delayed Turns** for tactical positioning
 
-**Supported Skills:** All 18 D&D 5e skills with proper ability score modifiers
-**Difficulty Classes:** Very Easy (5) to Nearly Impossible (30)
-**Special:** Natural 20s and 1s are highlighted with critical effects
+### Combat Commands
+```
+/attack target:Goblin bonus:5 damage:1d8+3
+/cast fireball slot:3           # AoE spell
+/combatinfo                      # View turn order
+/nextturn                        # Next combatant
+```
 
 ---
 
-## ⚔️ Combat System
+## 🛏️ Rest Mechanics
 
-Start combat with `/fight goblin:15:13 orc:25:14` (name:hp:ac format)
+### Short Rest
+- Spend Hit Dice to heal (roll + CON modifier)
+- **Warlock:** Pact Magic slots restored
+- **Fighter:** Second Wind restored
+- **Monk:** All Ki points restored
+- **Cleric/Paladin:** Channel Divinity restored
 
-- **Initiative** is rolled automatically using DEX modifiers
-- **Turn order** shows current combatant with HP/AC
-- **Attacks** use `/attack target:Goblin bonus:5 damage:1d8+3`
-- **Critical hits** (nat 20) deal double damage dice
-- **Combat mode** enforces strict turn order until `/endcombat`
+### Long Rest
+- Full HP restored
+- All spell slots restored
+- Half hit dice regained (minimum 1)
+- Exhaustion reduced by 1 level
+- Class resources restored (Rage, Ki, Bardic Inspiration, etc.)
 
 ---
 
@@ -157,8 +250,9 @@ Start combat with `/fight goblin:15:13 orc:25:14` (name:hp:ac format)
 Access `http://localhost:5000/portal/` when the Flask app is running:
 
 - **Character List** - View all characters with class/race/level
-- **Character Creation** - Full form with dice roller and standard array buttons
-- **Character Editor** - Edit stats, inventory, and proficiencies
+- **Character Sheet** - Full sheet with stats, equipment, spells
+- **Spell Management** - Learn, prepare, and manage spells
+- **Sync Button** - Update character with class/level data
 - **Campaign View** - See memory, NPCs, quests, and key events
 - **DM Dashboard** - Overview of all active campaigns
 
@@ -177,19 +271,19 @@ Access `http://localhost:5000/portal/` when the Flask app is running:
 ```
 ai-dm-voice/
 ├── app.py                 # Flask REST API & web portal
-├── discord_bot.py         # Main Discord bot (24 commands)
+├── discord_bot.py         # Main Discord bot (30+ commands)
 ├── config.py              # Configuration management
 ├── services/
 │   ├── openai_service.py  # GPT-4o + skill check detection + memory
 │   └── elevenlabs_service.py  # TTS with Edge fallback
 ├── utils/
-│   ├── character_manager.py   # D&D 5e character sheets
-│   ├── combat_manager.py      # Initiative, attacks, HP tracking
+│   ├── character_manager.py   # D&D 5e character sheets + equipment
+│   ├── combat_manager.py      # Initiative, attacks, legendary actions
 │   ├── dice_roller.py         # Dice notation parser
 │   ├── state_manager.py       # Campaign state + memory system
+│   ├── dnd5e_data.py          # Full D&D 5e SRD data
 │   ├── voice_map.py           # Voice ID mapping
-│   ├── voice_parser.py        # Voice tag extraction + TTS cleanup
-│   └── prompt_builder.py      # Dynamic system prompts
+│   └── voice_parser.py        # Voice tag extraction + TTS cleanup
 ├── webportal/
 │   ├── routes.py              # Flask routes
 │   └── templates/             # HTML templates

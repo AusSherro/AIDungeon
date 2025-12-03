@@ -1111,3 +1111,1248 @@ def calculate_ability_scores(base_scores: dict, race_name: str, subrace: str = N
     for stat, bonus in race_data.get("ability_bonuses", {}).items():
         result[stat] = result.get(stat, 10) + bonus
     return result
+
+
+# =============================================================================
+# EQUIPMENT - Weapons, Armor, and Gear
+# =============================================================================
+
+WEAPONS = {
+    # Simple Melee Weapons
+    "Club": {"damage": "1d4", "damage_type": "bludgeoning", "weight": 2, "cost": "1 sp", "properties": ["light"], "category": "simple", "melee": True},
+    "Dagger": {"damage": "1d4", "damage_type": "piercing", "weight": 1, "cost": "2 gp", "properties": ["finesse", "light", "thrown (20/60)"], "category": "simple", "melee": True},
+    "Greatclub": {"damage": "1d8", "damage_type": "bludgeoning", "weight": 10, "cost": "2 sp", "properties": ["two-handed"], "category": "simple", "melee": True},
+    "Handaxe": {"damage": "1d6", "damage_type": "slashing", "weight": 2, "cost": "5 gp", "properties": ["light", "thrown (20/60)"], "category": "simple", "melee": True},
+    "Javelin": {"damage": "1d6", "damage_type": "piercing", "weight": 2, "cost": "5 sp", "properties": ["thrown (30/120)"], "category": "simple", "melee": True},
+    "Light Hammer": {"damage": "1d4", "damage_type": "bludgeoning", "weight": 2, "cost": "2 gp", "properties": ["light", "thrown (20/60)"], "category": "simple", "melee": True},
+    "Mace": {"damage": "1d6", "damage_type": "bludgeoning", "weight": 4, "cost": "5 gp", "properties": [], "category": "simple", "melee": True},
+    "Quarterstaff": {"damage": "1d6", "damage_type": "bludgeoning", "weight": 4, "cost": "2 sp", "properties": ["versatile (1d8)"], "category": "simple", "melee": True},
+    "Sickle": {"damage": "1d4", "damage_type": "slashing", "weight": 2, "cost": "1 gp", "properties": ["light"], "category": "simple", "melee": True},
+    "Spear": {"damage": "1d6", "damage_type": "piercing", "weight": 3, "cost": "1 gp", "properties": ["thrown (20/60)", "versatile (1d8)"], "category": "simple", "melee": True},
+    
+    # Simple Ranged Weapons
+    "Light Crossbow": {"damage": "1d8", "damage_type": "piercing", "weight": 5, "cost": "25 gp", "properties": ["ammunition (80/320)", "loading", "two-handed"], "category": "simple", "melee": False},
+    "Dart": {"damage": "1d4", "damage_type": "piercing", "weight": 0.25, "cost": "5 cp", "properties": ["finesse", "thrown (20/60)"], "category": "simple", "melee": False},
+    "Shortbow": {"damage": "1d6", "damage_type": "piercing", "weight": 2, "cost": "25 gp", "properties": ["ammunition (80/320)", "two-handed"], "category": "simple", "melee": False},
+    "Sling": {"damage": "1d4", "damage_type": "bludgeoning", "weight": 0, "cost": "1 sp", "properties": ["ammunition (30/120)"], "category": "simple", "melee": False},
+    
+    # Martial Melee Weapons
+    "Battleaxe": {"damage": "1d8", "damage_type": "slashing", "weight": 4, "cost": "10 gp", "properties": ["versatile (1d10)"], "category": "martial", "melee": True},
+    "Flail": {"damage": "1d8", "damage_type": "bludgeoning", "weight": 2, "cost": "10 gp", "properties": [], "category": "martial", "melee": True},
+    "Glaive": {"damage": "1d10", "damage_type": "slashing", "weight": 6, "cost": "20 gp", "properties": ["heavy", "reach", "two-handed"], "category": "martial", "melee": True},
+    "Greataxe": {"damage": "1d12", "damage_type": "slashing", "weight": 7, "cost": "30 gp", "properties": ["heavy", "two-handed"], "category": "martial", "melee": True},
+    "Greatsword": {"damage": "2d6", "damage_type": "slashing", "weight": 6, "cost": "50 gp", "properties": ["heavy", "two-handed"], "category": "martial", "melee": True},
+    "Halberd": {"damage": "1d10", "damage_type": "slashing", "weight": 6, "cost": "20 gp", "properties": ["heavy", "reach", "two-handed"], "category": "martial", "melee": True},
+    "Lance": {"damage": "1d12", "damage_type": "piercing", "weight": 6, "cost": "10 gp", "properties": ["reach", "special"], "category": "martial", "melee": True},
+    "Longsword": {"damage": "1d8", "damage_type": "slashing", "weight": 3, "cost": "15 gp", "properties": ["versatile (1d10)"], "category": "martial", "melee": True},
+    "Maul": {"damage": "2d6", "damage_type": "bludgeoning", "weight": 10, "cost": "10 gp", "properties": ["heavy", "two-handed"], "category": "martial", "melee": True},
+    "Morningstar": {"damage": "1d8", "damage_type": "piercing", "weight": 4, "cost": "15 gp", "properties": [], "category": "martial", "melee": True},
+    "Pike": {"damage": "1d10", "damage_type": "piercing", "weight": 18, "cost": "5 gp", "properties": ["heavy", "reach", "two-handed"], "category": "martial", "melee": True},
+    "Rapier": {"damage": "1d8", "damage_type": "piercing", "weight": 2, "cost": "25 gp", "properties": ["finesse"], "category": "martial", "melee": True},
+    "Scimitar": {"damage": "1d6", "damage_type": "slashing", "weight": 3, "cost": "25 gp", "properties": ["finesse", "light"], "category": "martial", "melee": True},
+    "Shortsword": {"damage": "1d6", "damage_type": "piercing", "weight": 2, "cost": "10 gp", "properties": ["finesse", "light"], "category": "martial", "melee": True},
+    "Trident": {"damage": "1d6", "damage_type": "piercing", "weight": 4, "cost": "5 gp", "properties": ["thrown (20/60)", "versatile (1d8)"], "category": "martial", "melee": True},
+    "War Pick": {"damage": "1d8", "damage_type": "piercing", "weight": 2, "cost": "5 gp", "properties": [], "category": "martial", "melee": True},
+    "Warhammer": {"damage": "1d8", "damage_type": "bludgeoning", "weight": 2, "cost": "15 gp", "properties": ["versatile (1d10)"], "category": "martial", "melee": True},
+    "Whip": {"damage": "1d4", "damage_type": "slashing", "weight": 3, "cost": "2 gp", "properties": ["finesse", "reach"], "category": "martial", "melee": True},
+    
+    # Martial Ranged Weapons
+    "Blowgun": {"damage": "1", "damage_type": "piercing", "weight": 1, "cost": "10 gp", "properties": ["ammunition (25/100)", "loading"], "category": "martial", "melee": False},
+    "Hand Crossbow": {"damage": "1d6", "damage_type": "piercing", "weight": 3, "cost": "75 gp", "properties": ["ammunition (30/120)", "light", "loading"], "category": "martial", "melee": False},
+    "Heavy Crossbow": {"damage": "1d10", "damage_type": "piercing", "weight": 18, "cost": "50 gp", "properties": ["ammunition (100/400)", "heavy", "loading", "two-handed"], "category": "martial", "melee": False},
+    "Longbow": {"damage": "1d8", "damage_type": "piercing", "weight": 2, "cost": "50 gp", "properties": ["ammunition (150/600)", "heavy", "two-handed"], "category": "martial", "melee": False},
+    "Net": {"damage": "0", "damage_type": "none", "weight": 3, "cost": "1 gp", "properties": ["special", "thrown (5/15)"], "category": "martial", "melee": False},
+}
+
+ARMOR = {
+    # Light Armor
+    "Padded": {"ac": 11, "max_dex": None, "stealth_disadvantage": True, "weight": 8, "cost": "5 gp", "category": "light", "strength_req": None},
+    "Leather": {"ac": 11, "max_dex": None, "stealth_disadvantage": False, "weight": 10, "cost": "10 gp", "category": "light", "strength_req": None},
+    "Studded Leather": {"ac": 12, "max_dex": None, "stealth_disadvantage": False, "weight": 13, "cost": "45 gp", "category": "light", "strength_req": None},
+    
+    # Medium Armor
+    "Hide": {"ac": 12, "max_dex": 2, "stealth_disadvantage": False, "weight": 12, "cost": "10 gp", "category": "medium", "strength_req": None},
+    "Chain Shirt": {"ac": 13, "max_dex": 2, "stealth_disadvantage": False, "weight": 20, "cost": "50 gp", "category": "medium", "strength_req": None},
+    "Scale Mail": {"ac": 14, "max_dex": 2, "stealth_disadvantage": True, "weight": 45, "cost": "50 gp", "category": "medium", "strength_req": None},
+    "Breastplate": {"ac": 14, "max_dex": 2, "stealth_disadvantage": False, "weight": 20, "cost": "400 gp", "category": "medium", "strength_req": None},
+    "Half Plate": {"ac": 15, "max_dex": 2, "stealth_disadvantage": True, "weight": 40, "cost": "750 gp", "category": "medium", "strength_req": None},
+    
+    # Heavy Armor
+    "Ring Mail": {"ac": 14, "max_dex": 0, "stealth_disadvantage": True, "weight": 40, "cost": "30 gp", "category": "heavy", "strength_req": None},
+    "Chain Mail": {"ac": 16, "max_dex": 0, "stealth_disadvantage": True, "weight": 55, "cost": "75 gp", "category": "heavy", "strength_req": 13},
+    "Splint": {"ac": 17, "max_dex": 0, "stealth_disadvantage": True, "weight": 60, "cost": "200 gp", "category": "heavy", "strength_req": 15},
+    "Plate": {"ac": 18, "max_dex": 0, "stealth_disadvantage": True, "weight": 65, "cost": "1500 gp", "category": "heavy", "strength_req": 15},
+    
+    # Shields
+    "Shield": {"ac": 2, "max_dex": None, "stealth_disadvantage": False, "weight": 6, "cost": "10 gp", "category": "shield", "strength_req": None},
+}
+
+AMMUNITION = {
+    "Arrows (20)": {"cost": "1 gp", "weight": 1, "compatible": ["Shortbow", "Longbow"]},
+    "Blowgun Needles (50)": {"cost": "1 gp", "weight": 1, "compatible": ["Blowgun"]},
+    "Crossbow Bolts (20)": {"cost": "1 gp", "weight": 1.5, "compatible": ["Light Crossbow", "Hand Crossbow", "Heavy Crossbow"]},
+    "Sling Bullets (20)": {"cost": "4 cp", "weight": 1.5, "compatible": ["Sling"]},
+}
+
+ADVENTURING_GEAR = {
+    "Backpack": {"cost": "2 gp", "weight": 5},
+    "Bedroll": {"cost": "1 gp", "weight": 7},
+    "Rope (50 ft)": {"cost": "1 gp", "weight": 10},
+    "Torch": {"cost": "1 cp", "weight": 1},
+    "Rations (1 day)": {"cost": "5 sp", "weight": 2},
+    "Waterskin": {"cost": "2 sp", "weight": 5},
+    "Tinderbox": {"cost": "5 sp", "weight": 1},
+    "Healer's Kit": {"cost": "5 gp", "weight": 3, "uses": 10},
+    "Thieves' Tools": {"cost": "25 gp", "weight": 1},
+    "Holy Symbol": {"cost": "5 gp", "weight": 1},
+    "Arcane Focus (Crystal)": {"cost": "10 gp", "weight": 1},
+    "Component Pouch": {"cost": "25 gp", "weight": 2},
+    "Spellbook": {"cost": "50 gp", "weight": 3},
+    "Lantern (Hooded)": {"cost": "5 gp", "weight": 2},
+    "Oil Flask": {"cost": "1 sp", "weight": 1},
+    "Grappling Hook": {"cost": "2 gp", "weight": 4},
+    "Crowbar": {"cost": "2 gp", "weight": 5},
+    "Hammer": {"cost": "1 gp", "weight": 3},
+    "Pitons (10)": {"cost": "5 cp", "weight": 2.5},
+    "Mirror (Steel)": {"cost": "5 gp", "weight": 0.5},
+    "Manacles": {"cost": "2 gp", "weight": 6},
+    "Potion of Healing": {"cost": "50 gp", "weight": 0.5, "effect": "Heals 2d4+2 HP"},
+}
+
+
+def get_weapon(name: str) -> dict:
+    """Get weapon data by name."""
+    return WEAPONS.get(name)
+
+
+def get_armor(name: str) -> dict:
+    """Get armor data by name."""
+    return ARMOR.get(name)
+
+
+def calculate_ac(armor_name: str, dex_modifier: int, has_shield: bool = False) -> int:
+    """Calculate total AC based on armor, dex, and shield."""
+    base_ac = 10  # Unarmored
+    
+    if armor_name and armor_name in ARMOR:
+        armor = ARMOR[armor_name]
+        if armor["category"] == "shield":
+            # Shield only, use unarmored + shield
+            base_ac = 10 + dex_modifier + 2
+        else:
+            base_ac = armor["ac"]
+            if armor["max_dex"] is None:
+                # Light armor - full DEX bonus
+                base_ac += dex_modifier
+            elif armor["max_dex"] > 0:
+                # Medium armor - capped DEX bonus
+                base_ac += min(dex_modifier, armor["max_dex"])
+            # Heavy armor - no DEX bonus (max_dex = 0)
+    else:
+        # Unarmored
+        base_ac = 10 + dex_modifier
+    
+    if has_shield:
+        base_ac += 2
+    
+    return base_ac
+
+
+def get_weapons_by_category(category: str) -> list:
+    """Get all weapons of a specific category (simple/martial)."""
+    return [name for name, data in WEAPONS.items() if data["category"] == category]
+
+
+def get_melee_weapons() -> list:
+    """Get all melee weapons."""
+    return [name for name, data in WEAPONS.items() if data["melee"]]
+
+
+def get_ranged_weapons() -> list:
+    """Get all ranged weapons."""
+    return [name for name, data in WEAPONS.items() if not data["melee"]]
+
+
+# =============================================================================
+# CONDITIONS - Status effects with mechanical impacts
+# =============================================================================
+
+CONDITIONS = {
+    "Blinded": {
+        "description": "A blinded creature can't see and automatically fails any ability check that requires sight.",
+        "effects": {
+            "attack_rolls": "disadvantage",
+            "attacks_against": "advantage",
+            "auto_fail_sight_checks": True,
+        }
+    },
+    "Charmed": {
+        "description": "A charmed creature can't attack the charmer or target the charmer with harmful abilities or magical effects.",
+        "effects": {
+            "cant_attack_charmer": True,
+            "social_checks_from_charmer": "advantage",
+        }
+    },
+    "Deafened": {
+        "description": "A deafened creature can't hear and automatically fails any ability check that requires hearing.",
+        "effects": {
+            "auto_fail_hearing_checks": True,
+        }
+    },
+    "Frightened": {
+        "description": "A frightened creature has disadvantage on ability checks and attack rolls while the source of its fear is within line of sight.",
+        "effects": {
+            "attack_rolls": "disadvantage",
+            "ability_checks": "disadvantage",
+            "cant_move_closer_to_source": True,
+        }
+    },
+    "Grappled": {
+        "description": "A grappled creature's speed becomes 0, and it can't benefit from any bonus to its speed.",
+        "effects": {
+            "speed": 0,
+        }
+    },
+    "Incapacitated": {
+        "description": "An incapacitated creature can't take actions or reactions.",
+        "effects": {
+            "cant_take_actions": True,
+            "cant_take_reactions": True,
+        }
+    },
+    "Invisible": {
+        "description": "An invisible creature is impossible to see without the aid of magic or a special sense.",
+        "effects": {
+            "attack_rolls": "advantage",
+            "attacks_against": "disadvantage",
+            "heavily_obscured": True,
+        }
+    },
+    "Paralyzed": {
+        "description": "A paralyzed creature is incapacitated and can't move or speak.",
+        "effects": {
+            "incapacitated": True,
+            "speed": 0,
+            "cant_speak": True,
+            "auto_fail_str_dex_saves": True,
+            "attacks_against": "advantage",
+            "melee_hits_are_crits": True,
+        }
+    },
+    "Petrified": {
+        "description": "A petrified creature is transformed into a solid inanimate substance and is incapacitated.",
+        "effects": {
+            "incapacitated": True,
+            "speed": 0,
+            "auto_fail_str_dex_saves": True,
+            "attacks_against": "advantage",
+            "damage_resistance": "all",
+            "immune_to_poison_disease": True,
+            "weight_multiplied": 10,
+        }
+    },
+    "Poisoned": {
+        "description": "A poisoned creature has disadvantage on attack rolls and ability checks.",
+        "effects": {
+            "attack_rolls": "disadvantage",
+            "ability_checks": "disadvantage",
+        }
+    },
+    "Prone": {
+        "description": "A prone creature's only movement option is to crawl. The creature has disadvantage on attack rolls.",
+        "effects": {
+            "attack_rolls": "disadvantage",
+            "melee_attacks_against": "advantage",
+            "ranged_attacks_against": "disadvantage",
+            "movement": "crawl",
+            "stand_up_cost": "half_movement",
+        }
+    },
+    "Restrained": {
+        "description": "A restrained creature's speed becomes 0, and it can't benefit from any bonus to its speed.",
+        "effects": {
+            "speed": 0,
+            "attack_rolls": "disadvantage",
+            "attacks_against": "advantage",
+            "dex_saves": "disadvantage",
+        }
+    },
+    "Stunned": {
+        "description": "A stunned creature is incapacitated, can't move, and can speak only falteringly.",
+        "effects": {
+            "incapacitated": True,
+            "speed": 0,
+            "auto_fail_str_dex_saves": True,
+            "attacks_against": "advantage",
+        }
+    },
+    "Unconscious": {
+        "description": "An unconscious creature is incapacitated, can't move or speak, and is unaware of its surroundings.",
+        "effects": {
+            "incapacitated": True,
+            "speed": 0,
+            "cant_speak": True,
+            "unaware": True,
+            "drops_held_items": True,
+            "falls_prone": True,
+            "auto_fail_str_dex_saves": True,
+            "attacks_against": "advantage",
+            "melee_hits_are_crits": True,
+        }
+    },
+    "Exhaustion": {
+        "description": "Exhaustion is measured in six levels. Effects are cumulative.",
+        "levels": {
+            1: {"effect": "Disadvantage on ability checks"},
+            2: {"effect": "Speed halved"},
+            3: {"effect": "Disadvantage on attack rolls and saving throws"},
+            4: {"effect": "Hit point maximum halved"},
+            5: {"effect": "Speed reduced to 0"},
+            6: {"effect": "Death"},
+        }
+    },
+    "Concentration": {
+        "description": "Some spells require concentration to maintain. Taking damage requires a Constitution save (DC 10 or half damage, whichever is higher).",
+        "effects": {
+            "con_save_on_damage": True,
+            "ends_on_incapacitated": True,
+            "ends_on_another_concentration": True,
+        }
+    },
+}
+
+
+def get_condition(name: str) -> dict:
+    """Get condition data by name."""
+    return CONDITIONS.get(name)
+
+
+def get_condition_effects(name: str) -> dict:
+    """Get the mechanical effects of a condition."""
+    condition = CONDITIONS.get(name)
+    if condition:
+        return condition.get("effects", {})
+    return {}
+
+
+def apply_exhaustion_effects(level: int) -> list:
+    """Get cumulative exhaustion effects up to the given level."""
+    if level < 1 or level > 6:
+        return []
+    
+    effects = []
+    exhaustion = CONDITIONS.get("Exhaustion", {}).get("levels", {})
+    for i in range(1, level + 1):
+        if i in exhaustion:
+            effects.append(exhaustion[i]["effect"])
+    return effects
+
+
+def check_attack_modifiers(conditions: list) -> dict:
+    """Check how conditions affect attack rolls."""
+    result = {"advantage": False, "disadvantage": False}
+    
+    for condition_name in conditions:
+        effects = get_condition_effects(condition_name)
+        if effects.get("attack_rolls") == "advantage":
+            result["advantage"] = True
+        elif effects.get("attack_rolls") == "disadvantage":
+            result["disadvantage"] = True
+    
+    return result
+
+
+def check_attacks_against_modifiers(conditions: list) -> dict:
+    """Check how a target's conditions affect attacks against them."""
+    result = {"advantage": False, "disadvantage": False}
+    
+    for condition_name in conditions:
+        effects = get_condition_effects(condition_name)
+        if effects.get("attacks_against") == "advantage":
+            result["advantage"] = True
+        elif effects.get("attacks_against") == "disadvantage":
+            result["disadvantage"] = True
+    
+    return result
+
+
+# =============================================================================
+# FEATS
+# =============================================================================
+
+FEATS = {
+    "Alert": {
+        "description": "Always on the lookout for danger, you gain benefits that help you avoid ambushes.",
+        "effects": {
+            "initiative_bonus": 5,
+            "cant_be_surprised": True,
+            "no_advantage_from_hidden": True,
+        },
+        "prerequisites": None,
+    },
+    "Athlete": {
+        "description": "You have undergone extensive physical training.",
+        "effects": {
+            "ability_increase": {"choice": ["STR", "DEX"], "amount": 1},
+            "stand_up_cost": "5 feet",
+            "climbing_no_extra_cost": True,
+            "running_jump_bonus": True,
+        },
+        "prerequisites": None,
+    },
+    "Charger": {
+        "description": "When you use your action to Dash, you can use a bonus action to make one melee attack or shove.",
+        "effects": {
+            "dash_bonus_attack": True,
+            "charge_damage_bonus": 5,
+        },
+        "prerequisites": None,
+    },
+    "Crossbow Expert": {
+        "description": "Thanks to extensive practice with the crossbow, you gain benefits.",
+        "effects": {
+            "ignore_loading": True,
+            "no_disadvantage_close_range": True,
+            "bonus_action_hand_crossbow": True,
+        },
+        "prerequisites": None,
+    },
+    "Defensive Duelist": {
+        "description": "When wielding a finesse weapon, you can add your proficiency bonus to AC as a reaction.",
+        "effects": {
+            "reaction_ac_bonus": "proficiency",
+            "requires_finesse_weapon": True,
+        },
+        "prerequisites": {"DEX": 13},
+    },
+    "Dual Wielder": {
+        "description": "You master fighting with two weapons.",
+        "effects": {
+            "ac_bonus_dual_wield": 1,
+            "dual_wield_non_light": True,
+            "draw_two_weapons": True,
+        },
+        "prerequisites": None,
+    },
+    "Durable": {
+        "description": "Hardy and resilient, you gain increased durability.",
+        "effects": {
+            "ability_increase": {"stat": "CON", "amount": 1},
+            "minimum_hit_dice_heal": "double_con_mod",
+        },
+        "prerequisites": None,
+    },
+    "Elemental Adept": {
+        "description": "You gain resistance to a damage type and can ignore resistance.",
+        "effects": {
+            "ignore_resistance": True,
+            "minimum_damage_dice": 2,
+            "damage_type_choice": ["acid", "cold", "fire", "lightning", "thunder"],
+        },
+        "prerequisites": {"spellcasting": True},
+    },
+    "Grappler": {
+        "description": "You've developed the skills necessary to hold your own in close-quarters grappling.",
+        "effects": {
+            "advantage_vs_grappled": True,
+            "pin_creature": True,
+        },
+        "prerequisites": {"STR": 13},
+    },
+    "Great Weapon Master": {
+        "description": "You've learned to put the weight of a weapon to your advantage.",
+        "effects": {
+            "bonus_action_attack_on_crit": True,
+            "bonus_action_attack_on_kill": True,
+            "power_attack": {"attack_penalty": -5, "damage_bonus": 10},
+        },
+        "prerequisites": None,
+    },
+    "Healer": {
+        "description": "You are an able physician, allowing you to mend wounds quickly.",
+        "effects": {
+            "stabilize_to_1hp": True,
+            "healer_kit_heal": "1d6 + 4 + creature_hit_dice",
+        },
+        "prerequisites": None,
+    },
+    "Heavily Armored": {
+        "description": "You have trained to master the use of heavy armor.",
+        "effects": {
+            "ability_increase": {"stat": "STR", "amount": 1},
+            "heavy_armor_proficiency": True,
+        },
+        "prerequisites": {"armor_proficiency": "medium"},
+    },
+    "Heavy Armor Master": {
+        "description": "You can use your armor to deflect strikes that would kill others.",
+        "effects": {
+            "ability_increase": {"stat": "STR", "amount": 1},
+            "nonmagical_damage_reduction": 3,
+        },
+        "prerequisites": {"armor_proficiency": "heavy"},
+    },
+    "Inspiring Leader": {
+        "description": "You can spend 10 minutes inspiring your companions, granting temporary HP.",
+        "effects": {
+            "temp_hp_grant": "level + CHA",
+            "affects_up_to": 6,
+        },
+        "prerequisites": {"CHA": 13},
+    },
+    "Keen Mind": {
+        "description": "You have a mind that can track time, direction, and detail with uncanny precision.",
+        "effects": {
+            "ability_increase": {"stat": "INT", "amount": 1},
+            "always_know_north": True,
+            "always_know_time": True,
+            "perfect_recall_1_month": True,
+        },
+        "prerequisites": None,
+    },
+    "Lightly Armored": {
+        "description": "You have trained to master the use of light armor.",
+        "effects": {
+            "ability_increase": {"choice": ["STR", "DEX"], "amount": 1},
+            "light_armor_proficiency": True,
+        },
+        "prerequisites": None,
+    },
+    "Linguist": {
+        "description": "You have studied languages and codes.",
+        "effects": {
+            "ability_increase": {"stat": "INT", "amount": 1},
+            "extra_languages": 3,
+            "create_ciphers": True,
+        },
+        "prerequisites": None,
+    },
+    "Lucky": {
+        "description": "You have inexplicable luck that seems to kick in at just the right moment.",
+        "effects": {
+            "luck_points": 3,
+            "reroll_attack_ability_save": True,
+            "force_enemy_reroll": True,
+        },
+        "prerequisites": None,
+    },
+    "Mage Slayer": {
+        "description": "You have practiced techniques useful in melee combat against spellcasters.",
+        "effects": {
+            "reaction_attack_on_spell": True,
+            "advantage_concentration_save": True,
+            "advantage_save_vs_adjacent_spell": True,
+        },
+        "prerequisites": None,
+    },
+    "Magic Initiate": {
+        "description": "Choose a class: you learn two cantrips and one 1st-level spell from that class's list.",
+        "effects": {
+            "learn_cantrips": 2,
+            "learn_1st_level_spell": 1,
+            "cast_once_per_long_rest": True,
+        },
+        "prerequisites": None,
+    },
+    "Martial Adept": {
+        "description": "You have martial training that allows you to perform special combat maneuvers.",
+        "effects": {
+            "learn_maneuvers": 2,
+            "superiority_dice": "1d6",
+        },
+        "prerequisites": None,
+    },
+    "Medium Armor Master": {
+        "description": "You have practiced moving in medium armor.",
+        "effects": {
+            "no_stealth_disadvantage_medium": True,
+            "max_dex_bonus_medium": 3,
+        },
+        "prerequisites": {"armor_proficiency": "medium"},
+    },
+    "Mobile": {
+        "description": "You are exceptionally speedy and agile.",
+        "effects": {
+            "speed_bonus": 10,
+            "no_difficult_terrain_dash": True,
+            "no_opportunity_attack_after_melee": True,
+        },
+        "prerequisites": None,
+    },
+    "Moderately Armored": {
+        "description": "You have trained to master the use of medium armor and shields.",
+        "effects": {
+            "ability_increase": {"choice": ["STR", "DEX"], "amount": 1},
+            "medium_armor_proficiency": True,
+            "shield_proficiency": True,
+        },
+        "prerequisites": {"armor_proficiency": "light"},
+    },
+    "Mounted Combatant": {
+        "description": "You are a dangerous foe to face while mounted.",
+        "effects": {
+            "advantage_vs_smaller_unmounted": True,
+            "redirect_attack_to_self": True,
+            "mount_evasion": True,
+        },
+        "prerequisites": None,
+    },
+    "Observant": {
+        "description": "Quick to notice details, you gain benefits to perception.",
+        "effects": {
+            "ability_increase": {"choice": ["INT", "WIS"], "amount": 1},
+            "read_lips": True,
+            "passive_perception_bonus": 5,
+            "passive_investigation_bonus": 5,
+        },
+        "prerequisites": None,
+    },
+    "Polearm Master": {
+        "description": "You keep your enemies at bay with reach weapons.",
+        "effects": {
+            "bonus_action_butt_attack": "1d4",
+            "opportunity_attack_on_enter_reach": True,
+            "works_with": ["glaive", "halberd", "pike", "quarterstaff", "spear"],
+        },
+        "prerequisites": None,
+    },
+    "Resilient": {
+        "description": "Choose one ability score. You gain proficiency in saving throws using that ability.",
+        "effects": {
+            "ability_increase": {"choice": "any", "amount": 1},
+            "saving_throw_proficiency": "chosen_ability",
+        },
+        "prerequisites": None,
+    },
+    "Ritual Caster": {
+        "description": "You have learned a number of spells that you can cast as rituals.",
+        "effects": {
+            "ritual_book": True,
+            "learn_ritual_spells": True,
+        },
+        "prerequisites": {"INT": 13, "or": {"WIS": 13}},
+    },
+    "Savage Attacker": {
+        "description": "Once per turn when you roll damage for a melee attack, you can reroll and use either total.",
+        "effects": {
+            "reroll_melee_damage": True,
+            "once_per_turn": True,
+        },
+        "prerequisites": None,
+    },
+    "Sentinel": {
+        "description": "You have mastered techniques to take advantage of every drop in any enemy's guard.",
+        "effects": {
+            "opportunity_attack_stops_movement": True,
+            "opportunity_attack_on_disengage": True,
+            "reaction_attack_on_ally_attack": True,
+        },
+        "prerequisites": None,
+    },
+    "Sharpshooter": {
+        "description": "You have mastered ranged weapons and can make shots that others find impossible.",
+        "effects": {
+            "ignore_cover_except_total": True,
+            "no_disadvantage_long_range": True,
+            "power_attack": {"attack_penalty": -5, "damage_bonus": 10},
+        },
+        "prerequisites": None,
+    },
+    "Shield Master": {
+        "description": "You use shields for both offense and defense.",
+        "effects": {
+            "bonus_action_shove": True,
+            "add_shield_ac_to_dex_save": True,
+            "no_damage_on_dex_save_success": True,
+        },
+        "prerequisites": None,
+    },
+    "Skilled": {
+        "description": "You gain proficiency in any combination of three skills or tools of your choice.",
+        "effects": {
+            "skill_or_tool_proficiencies": 3,
+        },
+        "prerequisites": None,
+    },
+    "Skulker": {
+        "description": "You are expert at slinking through shadows.",
+        "effects": {
+            "hide_when_lightly_obscured": True,
+            "no_position_reveal_on_miss": True,
+            "no_disadvantage_dim_light_perception": True,
+        },
+        "prerequisites": {"DEX": 13},
+    },
+    "Spell Sniper": {
+        "description": "You have learned techniques to enhance your attacks with certain kinds of spells.",
+        "effects": {
+            "double_spell_attack_range": True,
+            "ignore_cover": True,
+            "learn_attack_cantrip": 1,
+        },
+        "prerequisites": {"spellcasting": True},
+    },
+    "Tavern Brawler": {
+        "description": "Accustomed to rough-and-tumble fighting using whatever is at hand.",
+        "effects": {
+            "ability_increase": {"choice": ["STR", "CON"], "amount": 1},
+            "unarmed_damage": "1d4",
+            "improvised_weapon_proficiency": True,
+            "bonus_action_grapple_on_hit": True,
+        },
+        "prerequisites": None,
+    },
+    "Tough": {
+        "description": "Your hit point maximum increases.",
+        "effects": {
+            "hp_bonus_per_level": 2,
+        },
+        "prerequisites": None,
+    },
+    "War Caster": {
+        "description": "You have practiced casting spells in the midst of combat.",
+        "effects": {
+            "advantage_concentration": True,
+            "somatic_with_full_hands": True,
+            "opportunity_attack_spell": True,
+        },
+        "prerequisites": {"spellcasting": True},
+    },
+    "Weapon Master": {
+        "description": "You have practiced extensively with a variety of weapons.",
+        "effects": {
+            "ability_increase": {"choice": ["STR", "DEX"], "amount": 1},
+            "weapon_proficiencies": 4,
+        },
+        "prerequisites": None,
+    },
+}
+
+
+def get_feat(name: str) -> dict:
+    """Get feat data by name."""
+    return FEATS.get(name)
+
+
+def get_all_feats() -> list:
+    """Get list of all feat names."""
+    return list(FEATS.keys())
+
+
+def check_feat_prerequisites(feat_name: str, character_data: dict) -> tuple:
+    """Check if a character meets feat prerequisites.
+    
+    Returns:
+        tuple of (meets_prereqs: bool, reason: str)
+    """
+    feat = get_feat(feat_name)
+    if not feat:
+        return False, f"Feat '{feat_name}' not found"
+    
+    prereqs = feat.get("prerequisites")
+    if not prereqs:
+        return True, "No prerequisites"
+    
+    # Check ability score requirements
+    for stat in ["STR", "DEX", "CON", "INT", "WIS", "CHA"]:
+        if stat in prereqs:
+            if character_data.get(stat, 10) < prereqs[stat]:
+                return False, f"Requires {stat} {prereqs[stat]} (you have {character_data.get(stat, 10)})"
+    
+    # Check spellcasting requirement
+    if prereqs.get("spellcasting"):
+        if not character_data.get("spellcasting"):
+            return False, "Requires the ability to cast at least one spell"
+    
+    # Check armor proficiency requirements
+    if "armor_proficiency" in prereqs:
+        required = prereqs["armor_proficiency"]
+        proficiencies = character_data.get("armor_proficiencies", [])
+        if required not in proficiencies:
+            return False, f"Requires proficiency with {required} armor"
+    
+    return True, "Prerequisites met"
+
+
+# =============================================================================
+# MONSTERS - Pre-built statblocks for combat
+# =============================================================================
+
+MONSTERS = {
+    # CR 1/8
+    "Kobold": {
+        "name": "Kobold",
+        "size": "Small",
+        "type": "humanoid",
+        "alignment": "lawful evil",
+        "ac": 12,
+        "hp": 5,
+        "hit_dice": "2d6-2",
+        "speed": 30,
+        "stats": {"STR": 7, "DEX": 15, "CON": 9, "INT": 8, "WIS": 7, "CHA": 8},
+        "senses": {"darkvision": 60},
+        "languages": ["Common", "Draconic"],
+        "cr": "1/8",
+        "xp": 25,
+        "traits": [
+            {"name": "Sunlight Sensitivity", "description": "Disadvantage on attack rolls and Perception checks in sunlight."},
+            {"name": "Pack Tactics", "description": "Advantage on attack rolls if ally is within 5 ft of target."},
+        ],
+        "actions": [
+            {"name": "Dagger", "type": "melee", "attack_bonus": 4, "damage": "1d4+2", "damage_type": "piercing"},
+            {"name": "Sling", "type": "ranged", "attack_bonus": 4, "damage": "1d4+2", "damage_type": "bludgeoning", "range": "30/120"},
+        ],
+    },
+    
+    # CR 1/4
+    "Goblin": {
+        "name": "Goblin",
+        "size": "Small",
+        "type": "humanoid",
+        "alignment": "neutral evil",
+        "ac": 15,
+        "hp": 7,
+        "hit_dice": "2d6",
+        "speed": 30,
+        "stats": {"STR": 8, "DEX": 14, "CON": 10, "INT": 10, "WIS": 8, "CHA": 8},
+        "skills": {"Stealth": 6},
+        "senses": {"darkvision": 60},
+        "languages": ["Common", "Goblin"],
+        "cr": "1/4",
+        "xp": 50,
+        "traits": [
+            {"name": "Nimble Escape", "description": "Can take Disengage or Hide as a bonus action."},
+        ],
+        "actions": [
+            {"name": "Scimitar", "type": "melee", "attack_bonus": 4, "damage": "1d6+2", "damage_type": "slashing"},
+            {"name": "Shortbow", "type": "ranged", "attack_bonus": 4, "damage": "1d6+2", "damage_type": "piercing", "range": "80/320"},
+        ],
+    },
+    
+    "Skeleton": {
+        "name": "Skeleton",
+        "size": "Medium",
+        "type": "undead",
+        "alignment": "lawful evil",
+        "ac": 13,
+        "hp": 13,
+        "hit_dice": "2d8+4",
+        "speed": 30,
+        "stats": {"STR": 10, "DEX": 14, "CON": 15, "INT": 6, "WIS": 8, "CHA": 5},
+        "vulnerabilities": ["bludgeoning"],
+        "immunities": ["poison"],
+        "condition_immunities": ["exhaustion", "poisoned"],
+        "senses": {"darkvision": 60},
+        "languages": ["understands languages it knew in life"],
+        "cr": "1/4",
+        "xp": 50,
+        "actions": [
+            {"name": "Shortsword", "type": "melee", "attack_bonus": 4, "damage": "1d6+2", "damage_type": "piercing"},
+            {"name": "Shortbow", "type": "ranged", "attack_bonus": 4, "damage": "1d6+2", "damage_type": "piercing", "range": "80/320"},
+        ],
+    },
+    
+    "Zombie": {
+        "name": "Zombie",
+        "size": "Medium",
+        "type": "undead",
+        "alignment": "neutral evil",
+        "ac": 8,
+        "hp": 22,
+        "hit_dice": "3d8+9",
+        "speed": 20,
+        "stats": {"STR": 13, "DEX": 6, "CON": 16, "INT": 3, "WIS": 6, "CHA": 5},
+        "saving_throws": {"WIS": 0},
+        "immunities": ["poison"],
+        "condition_immunities": ["poisoned"],
+        "senses": {"darkvision": 60},
+        "cr": "1/4",
+        "xp": 50,
+        "traits": [
+            {"name": "Undead Fortitude", "description": "If reduced to 0 HP, make CON save DC 5 + damage. On success, drop to 1 HP instead. Radiant/crit bypasses."},
+        ],
+        "actions": [
+            {"name": "Slam", "type": "melee", "attack_bonus": 3, "damage": "1d6+1", "damage_type": "bludgeoning"},
+        ],
+    },
+    
+    # CR 1/2
+    "Orc": {
+        "name": "Orc",
+        "size": "Medium",
+        "type": "humanoid",
+        "alignment": "chaotic evil",
+        "ac": 13,
+        "hp": 15,
+        "hit_dice": "2d8+6",
+        "speed": 30,
+        "stats": {"STR": 16, "DEX": 12, "CON": 16, "INT": 7, "WIS": 11, "CHA": 10},
+        "skills": {"Intimidation": 2},
+        "senses": {"darkvision": 60},
+        "languages": ["Common", "Orc"],
+        "cr": "1/2",
+        "xp": 100,
+        "traits": [
+            {"name": "Aggressive", "description": "As a bonus action, can move up to speed toward hostile creature it can see."},
+        ],
+        "actions": [
+            {"name": "Greataxe", "type": "melee", "attack_bonus": 5, "damage": "1d12+3", "damage_type": "slashing"},
+            {"name": "Javelin", "type": "melee_or_ranged", "attack_bonus": 5, "damage": "1d6+3", "damage_type": "piercing", "range": "30/120"},
+        ],
+    },
+    
+    "Hobgoblin": {
+        "name": "Hobgoblin",
+        "size": "Medium",
+        "type": "humanoid",
+        "alignment": "lawful evil",
+        "ac": 18,
+        "hp": 11,
+        "hit_dice": "2d8+2",
+        "speed": 30,
+        "stats": {"STR": 13, "DEX": 12, "CON": 12, "INT": 10, "WIS": 10, "CHA": 9},
+        "senses": {"darkvision": 60},
+        "languages": ["Common", "Goblin"],
+        "cr": "1/2",
+        "xp": 100,
+        "traits": [
+            {"name": "Martial Advantage", "description": "Once per turn, deal extra 2d6 damage if ally within 5 ft of target."},
+        ],
+        "actions": [
+            {"name": "Longsword", "type": "melee", "attack_bonus": 3, "damage": "1d8+1", "damage_type": "slashing"},
+            {"name": "Longbow", "type": "ranged", "attack_bonus": 3, "damage": "1d8+1", "damage_type": "piercing", "range": "150/600"},
+        ],
+    },
+    
+    # CR 1
+    "Bugbear": {
+        "name": "Bugbear",
+        "size": "Medium",
+        "type": "humanoid",
+        "alignment": "chaotic evil",
+        "ac": 16,
+        "hp": 27,
+        "hit_dice": "5d8+5",
+        "speed": 30,
+        "stats": {"STR": 15, "DEX": 14, "CON": 13, "INT": 8, "WIS": 11, "CHA": 9},
+        "skills": {"Stealth": 6, "Survival": 2},
+        "senses": {"darkvision": 60},
+        "languages": ["Common", "Goblin"],
+        "cr": "1",
+        "xp": 200,
+        "traits": [
+            {"name": "Brute", "description": "Melee weapon deals one extra die of damage (included)."},
+            {"name": "Surprise Attack", "description": "If surprises a creature, deals extra 2d6 damage on first hit."},
+        ],
+        "actions": [
+            {"name": "Morningstar", "type": "melee", "attack_bonus": 4, "damage": "2d8+2", "damage_type": "piercing"},
+            {"name": "Javelin", "type": "melee_or_ranged", "attack_bonus": 4, "damage": "2d6+2", "damage_type": "piercing", "range": "30/120"},
+        ],
+    },
+    
+    "Dire Wolf": {
+        "name": "Dire Wolf",
+        "size": "Large",
+        "type": "beast",
+        "alignment": "unaligned",
+        "ac": 14,
+        "hp": 37,
+        "hit_dice": "5d10+10",
+        "speed": 50,
+        "stats": {"STR": 17, "DEX": 15, "CON": 15, "INT": 3, "WIS": 12, "CHA": 7},
+        "skills": {"Perception": 3, "Stealth": 4},
+        "senses": {},
+        "cr": "1",
+        "xp": 200,
+        "traits": [
+            {"name": "Keen Hearing and Smell", "description": "Advantage on Perception checks that rely on hearing or smell."},
+            {"name": "Pack Tactics", "description": "Advantage on attack rolls if ally is within 5 ft of target."},
+        ],
+        "actions": [
+            {"name": "Bite", "type": "melee", "attack_bonus": 5, "damage": "2d6+3", "damage_type": "piercing", 
+             "special": "DC 13 STR save or knocked prone"},
+        ],
+    },
+    
+    "Ghoul": {
+        "name": "Ghoul",
+        "size": "Medium",
+        "type": "undead",
+        "alignment": "chaotic evil",
+        "ac": 12,
+        "hp": 22,
+        "hit_dice": "5d8",
+        "speed": 30,
+        "stats": {"STR": 13, "DEX": 15, "CON": 10, "INT": 7, "WIS": 10, "CHA": 6},
+        "immunities": ["poison"],
+        "condition_immunities": ["charmed", "exhaustion", "poisoned"],
+        "senses": {"darkvision": 60},
+        "languages": ["Common"],
+        "cr": "1",
+        "xp": 200,
+        "actions": [
+            {"name": "Bite", "type": "melee", "attack_bonus": 2, "damage": "2d6+2", "damage_type": "piercing"},
+            {"name": "Claws", "type": "melee", "attack_bonus": 4, "damage": "2d4+2", "damage_type": "slashing",
+             "special": "DC 10 CON save or paralyzed for 1 minute (repeat save at end of turn). Elves immune."},
+        ],
+    },
+    
+    # CR 2
+    "Ogre": {
+        "name": "Ogre",
+        "size": "Large",
+        "type": "giant",
+        "alignment": "chaotic evil",
+        "ac": 11,
+        "hp": 59,
+        "hit_dice": "7d10+21",
+        "speed": 40,
+        "stats": {"STR": 19, "DEX": 8, "CON": 16, "INT": 5, "WIS": 7, "CHA": 7},
+        "senses": {"darkvision": 60},
+        "languages": ["Common", "Giant"],
+        "cr": "2",
+        "xp": 450,
+        "actions": [
+            {"name": "Greatclub", "type": "melee", "attack_bonus": 6, "damage": "2d8+4", "damage_type": "bludgeoning"},
+            {"name": "Javelin", "type": "melee_or_ranged", "attack_bonus": 6, "damage": "2d6+4", "damage_type": "piercing", "range": "30/120"},
+        ],
+    },
+    
+    "Werewolf": {
+        "name": "Werewolf",
+        "size": "Medium",
+        "type": "humanoid (shapechanger)",
+        "alignment": "chaotic evil",
+        "ac": 11,
+        "hp": 58,
+        "hit_dice": "9d8+18",
+        "speed": 30,
+        "stats": {"STR": 15, "DEX": 13, "CON": 14, "INT": 10, "WIS": 11, "CHA": 10},
+        "skills": {"Perception": 4, "Stealth": 3},
+        "immunities": ["bludgeoning, piercing, slashing from nonmagical/nonsilvered weapons"],
+        "senses": {},
+        "languages": ["Common (can't speak in wolf form)"],
+        "cr": "3",
+        "xp": 700,
+        "traits": [
+            {"name": "Shapechanger", "description": "Can polymorph into wolf-humanoid hybrid, wolf, or back to human."},
+            {"name": "Keen Hearing and Smell", "description": "Advantage on Perception checks that rely on hearing or smell."},
+        ],
+        "actions": [
+            {"name": "Multiattack (hybrid only)", "type": "special", "description": "Two attacks: one bite and one claws"},
+            {"name": "Bite", "type": "melee", "attack_bonus": 4, "damage": "1d8+2", "damage_type": "piercing",
+             "special": "DC 12 CON save or cursed with lycanthropy"},
+            {"name": "Claws (hybrid only)", "type": "melee", "attack_bonus": 4, "damage": "2d4+2", "damage_type": "slashing"},
+        ],
+    },
+    
+    # CR 5
+    "Troll": {
+        "name": "Troll",
+        "size": "Large",
+        "type": "giant",
+        "alignment": "chaotic evil",
+        "ac": 15,
+        "hp": 84,
+        "hit_dice": "8d10+40",
+        "speed": 30,
+        "stats": {"STR": 18, "DEX": 13, "CON": 20, "INT": 7, "WIS": 9, "CHA": 7},
+        "skills": {"Perception": 2},
+        "senses": {"darkvision": 60},
+        "languages": ["Giant"],
+        "cr": "5",
+        "xp": 1800,
+        "traits": [
+            {"name": "Keen Smell", "description": "Advantage on Perception checks that rely on smell."},
+            {"name": "Regeneration", "description": "Regains 10 HP at start of turn. Stops if takes acid or fire damage. Dies only if at 0 HP and doesn't regenerate."},
+        ],
+        "actions": [
+            {"name": "Multiattack", "type": "special", "description": "Three attacks: one bite and two claws"},
+            {"name": "Bite", "type": "melee", "attack_bonus": 7, "damage": "1d6+4", "damage_type": "piercing"},
+            {"name": "Claw", "type": "melee", "attack_bonus": 7, "damage": "2d6+4", "damage_type": "slashing"},
+        ],
+    },
+    
+    # CR 8
+    "Young Green Dragon": {
+        "name": "Young Green Dragon",
+        "size": "Large",
+        "type": "dragon",
+        "alignment": "lawful evil",
+        "ac": 18,
+        "hp": 136,
+        "hit_dice": "16d10+48",
+        "speed": 40,
+        "fly_speed": 80,
+        "swim_speed": 40,
+        "stats": {"STR": 19, "DEX": 12, "CON": 17, "INT": 16, "WIS": 13, "CHA": 15},
+        "saving_throws": {"DEX": 4, "CON": 6, "WIS": 4, "CHA": 5},
+        "skills": {"Deception": 5, "Perception": 7, "Stealth": 4},
+        "immunities": ["poison"],
+        "condition_immunities": ["poisoned"],
+        "senses": {"blindsight": 30, "darkvision": 120},
+        "languages": ["Common", "Draconic"],
+        "cr": "8",
+        "xp": 3900,
+        "traits": [
+            {"name": "Amphibious", "description": "Can breathe air and water."},
+        ],
+        "actions": [
+            {"name": "Multiattack", "type": "special", "description": "Three attacks: one bite and two claws"},
+            {"name": "Bite", "type": "melee", "attack_bonus": 7, "damage": "2d10+4", "damage_type": "piercing", "extra_damage": "1d6 poison"},
+            {"name": "Claw", "type": "melee", "attack_bonus": 7, "damage": "2d6+4", "damage_type": "slashing"},
+            {"name": "Poison Breath (Recharge 5-6)", "type": "special", "damage": "12d6", "damage_type": "poison",
+             "description": "30 ft cone, DC 14 CON save for half damage"},
+        ],
+    },
+    
+    # Bosses
+    "Goblin Boss": {
+        "name": "Goblin Boss",
+        "size": "Small",
+        "type": "humanoid",
+        "alignment": "neutral evil",
+        "ac": 17,
+        "hp": 21,
+        "hit_dice": "6d6",
+        "speed": 30,
+        "stats": {"STR": 10, "DEX": 14, "CON": 10, "INT": 10, "WIS": 8, "CHA": 10},
+        "skills": {"Stealth": 6},
+        "senses": {"darkvision": 60},
+        "languages": ["Common", "Goblin"],
+        "cr": "1",
+        "xp": 200,
+        "traits": [
+            {"name": "Nimble Escape", "description": "Can take Disengage or Hide as a bonus action."},
+        ],
+        "actions": [
+            {"name": "Multiattack", "type": "special", "description": "Two attacks with scimitar"},
+            {"name": "Scimitar", "type": "melee", "attack_bonus": 4, "damage": "1d6+2", "damage_type": "slashing"},
+            {"name": "Javelin", "type": "melee_or_ranged", "attack_bonus": 2, "damage": "1d6", "damage_type": "piercing", "range": "30/120"},
+        ],
+        "reactions": [
+            {"name": "Redirect Attack", "description": "When missed by attack, can swap places with adjacent goblin who becomes target."},
+        ],
+    },
+    
+    "Orc War Chief": {
+        "name": "Orc War Chief",
+        "size": "Medium",
+        "type": "humanoid",
+        "alignment": "chaotic evil",
+        "ac": 16,
+        "hp": 93,
+        "hit_dice": "11d8+44",
+        "speed": 30,
+        "stats": {"STR": 18, "DEX": 12, "CON": 18, "INT": 11, "WIS": 11, "CHA": 16},
+        "saving_throws": {"STR": 6, "CON": 6, "WIS": 2},
+        "skills": {"Intimidation": 5},
+        "senses": {"darkvision": 60},
+        "languages": ["Common", "Orc"],
+        "cr": "4",
+        "xp": 1100,
+        "traits": [
+            {"name": "Aggressive", "description": "As a bonus action, can move up to speed toward hostile creature it can see."},
+            {"name": "Gruumsh's Fury", "description": "Deals extra 1d8 damage on hit (included)."},
+        ],
+        "actions": [
+            {"name": "Multiattack", "type": "special", "description": "Two attacks with greataxe or javelins"},
+            {"name": "Greataxe", "type": "melee", "attack_bonus": 6, "damage": "1d12+4", "damage_type": "slashing", "extra_damage": "1d8"},
+            {"name": "Javelin", "type": "melee_or_ranged", "attack_bonus": 6, "damage": "1d6+4", "damage_type": "piercing", "extra_damage": "1d8", "range": "30/120"},
+        ],
+        "special": {
+            "legendary_actions": None,
+            "lair_actions": None,
+        },
+    },
+}
+
+
+def get_monster(name: str) -> dict:
+    """Get monster statblock by name."""
+    return MONSTERS.get(name)
+
+
+def get_monsters_by_cr(cr: str) -> list:
+    """Get all monsters of a specific challenge rating."""
+    return [name for name, data in MONSTERS.items() if data.get("cr") == cr]
+
+
+def get_all_monsters() -> list:
+    """Get list of all monster names."""
+    return list(MONSTERS.keys())
+
+
+def get_monster_xp(name: str) -> int:
+    """Get XP value for a monster."""
+    monster = get_monster(name)
+    if monster:
+        return monster.get("xp", 0)
+    return 0
+
+
+def calculate_encounter_difficulty(monster_names: list, party_level: int, party_size: int = 4) -> dict:
+    """Calculate encounter difficulty based on monsters and party.
+    
+    Returns dict with:
+        - total_xp: Raw XP total
+        - adjusted_xp: XP after multiplier for number of monsters
+        - difficulty: "Trivial", "Easy", "Medium", "Hard", or "Deadly"
+    """
+    # XP thresholds per character level
+    thresholds = {
+        1: {"easy": 25, "medium": 50, "hard": 75, "deadly": 100},
+        2: {"easy": 50, "medium": 100, "hard": 150, "deadly": 200},
+        3: {"easy": 75, "medium": 150, "hard": 225, "deadly": 400},
+        4: {"easy": 125, "medium": 250, "hard": 375, "deadly": 500},
+        5: {"easy": 250, "medium": 500, "hard": 750, "deadly": 1100},
+        6: {"easy": 300, "medium": 600, "hard": 900, "deadly": 1400},
+        7: {"easy": 350, "medium": 750, "hard": 1100, "deadly": 1700},
+        8: {"easy": 450, "medium": 900, "hard": 1400, "deadly": 2100},
+        9: {"easy": 550, "medium": 1100, "hard": 1600, "deadly": 2400},
+        10: {"easy": 600, "medium": 1200, "hard": 1900, "deadly": 2800},
+        # ... continues to 20
+    }
+    
+    # Calculate party thresholds
+    level_thresh = thresholds.get(party_level, thresholds[10])
+    party_thresholds = {k: v * party_size for k, v in level_thresh.items()}
+    
+    # Calculate monster XP
+    total_xp = sum(get_monster_xp(name) for name in monster_names)
+    
+    # Encounter multiplier based on number of monsters
+    num_monsters = len(monster_names)
+    if num_monsters == 1:
+        multiplier = 1
+    elif num_monsters == 2:
+        multiplier = 1.5
+    elif num_monsters <= 6:
+        multiplier = 2
+    elif num_monsters <= 10:
+        multiplier = 2.5
+    elif num_monsters <= 14:
+        multiplier = 3
+    else:
+        multiplier = 4
+    
+    adjusted_xp = int(total_xp * multiplier)
+    
+    # Determine difficulty
+    if adjusted_xp >= party_thresholds["deadly"]:
+        difficulty = "Deadly"
+    elif adjusted_xp >= party_thresholds["hard"]:
+        difficulty = "Hard"
+    elif adjusted_xp >= party_thresholds["medium"]:
+        difficulty = "Medium"
+    elif adjusted_xp >= party_thresholds["easy"]:
+        difficulty = "Easy"
+    else:
+        difficulty = "Trivial"
+    
+    return {
+        "total_xp": total_xp,
+        "adjusted_xp": adjusted_xp,
+        "difficulty": difficulty,
+        "party_thresholds": party_thresholds,
+    }

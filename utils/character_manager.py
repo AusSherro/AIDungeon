@@ -357,41 +357,190 @@ def reset_spell_slots(user_id):
     return data
 
 def long_rest(user_id):
+    """Complete a long rest, restoring HP, spell slots, and other resources.
+    
+    Returns:
+        dict with 'data' (updated character) and 'summary' (what was restored)
+    """
     data = load_character(user_id)
     if not data:
         return None
+    
+    summary = []
+    
     # Restore HP to max
+    old_hp = data['hp']
     data['hp'] = data['max_hp']
-    # Reset spell slots
+    if old_hp < data['max_hp']:
+        summary.append(f"HP restored: {old_hp} → {data['max_hp']}")
+    
+    # Reset all spell slots
+    slots_restored = False
     for level in data['spell_slots_used']:
+        if data['spell_slots_used'][level] > 0:
+            slots_restored = True
         data['spell_slots_used'][level] = 0
-    # Reset hit dice used (regain half total)
-    data['hit_dice_used'] = max(0, data['hit_dice_used'] - (data['level'] // 2))
+    
+    # Reset Warlock pact slots if applicable
+    if data.get('pact_slots_used', 0) > 0:
+        data['pact_slots_used'] = 0
+        summary.append("Pact magic slots restored")
+    elif slots_restored:
+        summary.append("Spell slots restored")
+    
+    # Reset hit dice used (regain half total, minimum 1)
+    old_hit_dice_used = data.get('hit_dice_used', 0)
+    dice_to_regain = max(1, data['level'] // 2)
+    data['hit_dice_used'] = max(0, old_hit_dice_used - dice_to_regain)
+    if old_hit_dice_used > 0:
+        summary.append(f"Hit dice regained: {dice_to_regain}")
+    
     # Clear death saves
     data['death_saves'] = {'successes': 0, 'failures': 0}
+    
+    # Reduce exhaustion by 1 (if any and if well-fed)
+    if data.get('exhaustion_level', 0) > 0:
+        data['exhaustion_level'] -= 1
+        summary.append(f"Exhaustion reduced to level {data['exhaustion_level']}")
+        if data['exhaustion_level'] == 0:
+            if 'Exhaustion' in data.get('conditions', []):
+                data['conditions'].remove('Exhaustion')
+    
+    # Reset class-specific resources
+    class_name = data.get('class', '').lower()
+    
+    # Barbarian - restore rages
+    if class_name == 'barbarian':
+        data['rages_used'] = 0
+        summary.append("Rages restored")
+    
+    # Monk - restore ki points
+    if class_name == 'monk':
+        data['ki_used'] = 0
+        summary.append("Ki points restored")
+    
+    # Sorcerer - sorcery points (note: they DON'T auto-restore on long rest in base rules)
+    # But Font of Magic allows conversion, so we track it
+    
+    # Fighter - restore Second Wind and Action Surge
+    if class_name == 'fighter':
+        data['second_wind_used'] = False
+        data['action_surge_used'] = 0
+        summary.append("Second Wind and Action Surge restored")
+    
+    # Paladin - Lay on Hands pool restores
+    if class_name == 'paladin':
+        data['lay_on_hands_pool'] = data['level'] * 5
+        summary.append(f"Lay on Hands pool restored ({data['level'] * 5} HP)")
+    
+    # Cleric/Paladin - Channel Divinity
+    if class_name in ['cleric', 'paladin']:
+        data['channel_divinity_used'] = 0
+        summary.append("Channel Divinity restored")
+    
+    # Druid - Wild Shape uses
+    if class_name == 'druid':
+        data['wild_shape_uses'] = 2
+        summary.append("Wild Shape uses restored")
+    
+    # Bard - Bardic Inspiration
+    if class_name == 'bard':
+        data['bardic_inspiration_used'] = 0
+        summary.append("Bardic Inspiration restored")
+    
     save_character(user_id, data)
-    return data
+    
+    if not summary:
+        summary.append("Fully rested")
+    
+    return {
+        'data': data,
+        'summary': summary
+    }
+
 
 def short_rest(user_id, hit_dice_to_use=0):
+    """Complete a short rest, spending hit dice to heal and recovering some resources.
+    
+    Args:
+        user_id: The user's ID
+        hit_dice_to_use: Number of hit dice to spend for healing
+    
+    Returns:
+        dict with 'data' (updated character), 'healing' (amount healed), and 'summary'
+    """
     data = load_character(user_id)
     if not data:
         return None
+    
+    summary = []
+    total_healing = 0
     
     # Use hit dice to heal
     available_dice = data['level'] - data.get('hit_dice_used', 0)
     dice_used = min(hit_dice_to_use, available_dice)
     
     if dice_used > 0:
-        # Simplified healing calculation
         import random
         dice_type = int(data.get('hit_dice', '1d8').split('d')[1])
-        healing = sum(random.randint(1, dice_type) + get_ability_modifier(data['CON']) 
-                     for _ in range(dice_used))
-        data['hp'] = min(data['max_hp'], data['hp'] + healing)
+        con_mod = get_ability_modifier(data['CON'])
+        
+        healing_rolls = []
+        for _ in range(dice_used):
+            roll = random.randint(1, dice_type)
+            heal = max(0, roll + con_mod)  # Minimum 0 per die
+            healing_rolls.append(f"{roll}+{con_mod}={heal}")
+            total_healing += heal
+        
+        old_hp = data['hp']
+        data['hp'] = min(data['max_hp'], data['hp'] + total_healing)
+        actual_healing = data['hp'] - old_hp
         data['hit_dice_used'] = data.get('hit_dice_used', 0) + dice_used
+        
+        summary.append(f"Spent {dice_used} hit dice, healed {actual_healing} HP")
+    
+    # Class-specific short rest recovery
+    class_name = data.get('class', '').lower()
+    
+    # Warlock - Pact Magic slots recover on short rest!
+    if class_name == 'warlock':
+        if data.get('pact_slots_used', 0) > 0:
+            data['pact_slots_used'] = 0
+            summary.append("Pact magic slots restored!")
+    
+    # Fighter - Second Wind recovers (but they might have used it before the rest)
+    if class_name == 'fighter':
+        if data.get('second_wind_used', False):
+            data['second_wind_used'] = False
+            summary.append("Second Wind restored")
+    
+    # Monk - Ki points fully restore on short rest
+    if class_name == 'monk':
+        if data.get('ki_used', 0) > 0:
+            data['ki_used'] = 0
+            summary.append("Ki points restored")
+    
+    # Druid (Circle of the Land) - Recover spell slots? (Subclass feature)
+    # Wizard - Arcane Recovery (once per day, on short rest) - handled separately
+    
+    # Bard - Song of Rest adds healing (handled in healing calculation above)
+    
+    # Cleric/Paladin - Channel Divinity restores
+    if class_name in ['cleric', 'paladin']:
+        if data.get('channel_divinity_used', 0) > 0:
+            data['channel_divinity_used'] = 0
+            summary.append("Channel Divinity restored")
     
     save_character(user_id, data)
-    return data
+    
+    if not summary:
+        summary.append("Rested but nothing to recover")
+    
+    return {
+        'data': data,
+        'healing': total_healing,
+        'summary': summary
+    }
 
 def add_condition(user_id, condition):
     data = load_character(user_id)
@@ -848,3 +997,460 @@ def get_available_races():
         return list(RACES.keys())
     return ['Human', 'Elf', 'Dwarf', 'Halfling', 'Half-Elf', 'Half-Orc', 
             'Gnome', 'Dragonborn', 'Tiefling']
+
+
+# =============================================================================
+# EQUIPMENT MANAGEMENT FUNCTIONS
+# =============================================================================
+
+# Import equipment data
+try:
+    from .dnd5e_data import (
+        WEAPONS, ARMOR, AMMUNITION, ADVENTURING_GEAR, CONDITIONS,
+        get_weapon, get_armor, calculate_ac as dnd_calculate_ac,
+        get_condition, get_condition_effects, apply_exhaustion_effects,
+        check_attack_modifiers, check_attacks_against_modifiers
+    )
+    EQUIPMENT_DATA_AVAILABLE = True
+except ImportError:
+    EQUIPMENT_DATA_AVAILABLE = False
+
+
+def equip_weapon(user_id, weapon_name):
+    """Equip a weapon from inventory."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    # Check if weapon is in inventory
+    if weapon_name not in data.get('inventory', []):
+        return None, f"You don't have {weapon_name} in your inventory"
+    
+    # Check if it's a valid weapon
+    if EQUIPMENT_DATA_AVAILABLE:
+        weapon = get_weapon(weapon_name)
+        if not weapon:
+            # Could be a custom/magic weapon - allow it
+            pass
+    
+    # Unequip current weapon (put back in inventory if exists)
+    old_weapon = data.get('equipment', {}).get('weapon')
+    if old_weapon and old_weapon not in data.get('inventory', []):
+        data.setdefault('inventory', []).append(old_weapon)
+    
+    # Equip new weapon
+    data.setdefault('equipment', {})['weapon'] = weapon_name
+    
+    # Remove from general inventory (it's now equipped)
+    if weapon_name in data['inventory']:
+        data['inventory'].remove(weapon_name)
+    
+    save_character(user_id, data)
+    return data, f"Equipped {weapon_name}"
+
+
+def unequip_weapon(user_id):
+    """Unequip current weapon and put back in inventory."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    weapon = data.get('equipment', {}).get('weapon')
+    if not weapon:
+        return data, "No weapon equipped"
+    
+    data['equipment']['weapon'] = None
+    data.setdefault('inventory', []).append(weapon)
+    
+    save_character(user_id, data)
+    return data, f"Unequipped {weapon}"
+
+
+def equip_armor(user_id, armor_name):
+    """Equip armor from inventory and recalculate AC."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    # Check if armor is in inventory
+    if armor_name not in data.get('inventory', []):
+        return None, f"You don't have {armor_name} in your inventory"
+    
+    # Check if it's valid armor and check strength requirement
+    if EQUIPMENT_DATA_AVAILABLE:
+        armor = get_armor(armor_name)
+        if armor:
+            str_req = armor.get('strength_req')
+            if str_req and data.get('STR', 10) < str_req:
+                return None, f"{armor_name} requires {str_req} Strength (you have {data.get('STR', 10)})"
+    
+    # Unequip current armor
+    old_armor = data.get('equipment', {}).get('armor')
+    if old_armor and old_armor not in data.get('inventory', []):
+        data.setdefault('inventory', []).append(old_armor)
+    
+    # Equip new armor
+    data.setdefault('equipment', {})['armor'] = armor_name
+    
+    # Remove from general inventory
+    if armor_name in data['inventory']:
+        data['inventory'].remove(armor_name)
+    
+    # Recalculate AC
+    _recalculate_ac(data)
+    
+    save_character(user_id, data)
+    return data, f"Equipped {armor_name} (AC: {data['ac']})"
+
+
+def unequip_armor(user_id):
+    """Unequip armor and recalculate AC."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    armor = data.get('equipment', {}).get('armor')
+    if not armor:
+        return data, "No armor equipped"
+    
+    data['equipment']['armor'] = None
+    data.setdefault('inventory', []).append(armor)
+    
+    # Recalculate AC
+    _recalculate_ac(data)
+    
+    save_character(user_id, data)
+    return data, f"Unequipped {armor} (AC: {data['ac']})"
+
+
+def equip_shield(user_id, shield_name="Shield"):
+    """Equip a shield and recalculate AC."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    # Check if shield is in inventory
+    if shield_name not in data.get('inventory', []):
+        return None, f"You don't have a {shield_name} in your inventory"
+    
+    # Unequip current shield
+    old_shield = data.get('equipment', {}).get('shield')
+    if old_shield and old_shield not in data.get('inventory', []):
+        data.setdefault('inventory', []).append(old_shield)
+    
+    # Equip shield
+    data.setdefault('equipment', {})['shield'] = shield_name
+    
+    # Remove from inventory
+    if shield_name in data['inventory']:
+        data['inventory'].remove(shield_name)
+    
+    # Recalculate AC
+    _recalculate_ac(data)
+    
+    save_character(user_id, data)
+    return data, f"Equipped {shield_name} (AC: {data['ac']})"
+
+
+def unequip_shield(user_id):
+    """Unequip shield and recalculate AC."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    shield = data.get('equipment', {}).get('shield')
+    if not shield:
+        return data, "No shield equipped"
+    
+    data['equipment']['shield'] = None
+    data.setdefault('inventory', []).append(shield)
+    
+    # Recalculate AC
+    _recalculate_ac(data)
+    
+    save_character(user_id, data)
+    return data, f"Unequipped shield (AC: {data['ac']})"
+
+
+def _recalculate_ac(data):
+    """Internal function to recalculate AC based on equipped armor."""
+    dex_mod = get_ability_modifier(data.get('DEX', 10))
+    armor_name = data.get('equipment', {}).get('armor')
+    has_shield = data.get('equipment', {}).get('shield') is not None
+    
+    if EQUIPMENT_DATA_AVAILABLE:
+        data['ac'] = dnd_calculate_ac(armor_name, dex_mod, has_shield)
+    else:
+        # Fallback calculation
+        base_ac = 10 + dex_mod
+        if has_shield:
+            base_ac += 2
+        data['ac'] = base_ac
+
+
+def get_weapon_damage(user_id):
+    """Get the damage dice and type for currently equipped weapon."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    weapon_name = data.get('equipment', {}).get('weapon')
+    if not weapon_name:
+        # Unarmed strike
+        return "1", "bludgeoning", "Unarmed Strike"
+    
+    if EQUIPMENT_DATA_AVAILABLE:
+        weapon = get_weapon(weapon_name)
+        if weapon:
+            return weapon['damage'], weapon['damage_type'], weapon_name
+    
+    # Default fallback
+    return "1d6", "slashing", weapon_name
+
+
+def get_equipment_summary(user_id):
+    """Get a summary of equipped items."""
+    data = load_character(user_id)
+    if not data:
+        return None
+    
+    equipment = data.get('equipment', {})
+    
+    summary = []
+    
+    weapon = equipment.get('weapon')
+    if weapon:
+        if EQUIPMENT_DATA_AVAILABLE:
+            weapon_data = get_weapon(weapon)
+            if weapon_data:
+                props = ", ".join(weapon_data.get('properties', [])) or "none"
+                summary.append(f"⚔️ **Weapon:** {weapon} ({weapon_data['damage']} {weapon_data['damage_type']}) - {props}")
+            else:
+                summary.append(f"⚔️ **Weapon:** {weapon}")
+        else:
+            summary.append(f"⚔️ **Weapon:** {weapon}")
+    else:
+        summary.append("⚔️ **Weapon:** None (Unarmed)")
+    
+    armor = equipment.get('armor')
+    if armor:
+        if EQUIPMENT_DATA_AVAILABLE:
+            armor_data = get_armor(armor)
+            if armor_data:
+                stealth = " (Stealth Disadvantage)" if armor_data.get('stealth_disadvantage') else ""
+                summary.append(f"🛡️ **Armor:** {armor} (Base AC {armor_data['ac']}){stealth}")
+            else:
+                summary.append(f"🛡️ **Armor:** {armor}")
+        else:
+            summary.append(f"🛡️ **Armor:** {armor}")
+    else:
+        summary.append("🛡️ **Armor:** None (Unarmored)")
+    
+    shield = equipment.get('shield')
+    if shield:
+        summary.append(f"🛡️ **Shield:** {shield} (+2 AC)")
+    
+    summary.append(f"🔰 **Total AC:** {data.get('ac', 10)}")
+    
+    return "\n".join(summary)
+
+
+def add_to_inventory(user_id, item_name, quantity=1):
+    """Add items to inventory with quantity support."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    for _ in range(quantity):
+        data.setdefault('inventory', []).append(item_name)
+    
+    save_character(user_id, data)
+    
+    if quantity > 1:
+        return data, f"Added {quantity}x {item_name} to inventory"
+    return data, f"Added {item_name} to inventory"
+
+
+def remove_from_inventory(user_id, item_name, quantity=1):
+    """Remove items from inventory."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    removed = 0
+    for _ in range(quantity):
+        if item_name in data.get('inventory', []):
+            data['inventory'].remove(item_name)
+            removed += 1
+    
+    if removed == 0:
+        return None, f"You don't have {item_name} in your inventory"
+    
+    save_character(user_id, data)
+    
+    if quantity > 1:
+        return data, f"Removed {removed}x {item_name} from inventory"
+    return data, f"Removed {item_name} from inventory"
+
+
+def get_inventory_summary(user_id):
+    """Get a formatted inventory summary with item counts."""
+    data = load_character(user_id)
+    if not data:
+        return None
+    
+    inventory = data.get('inventory', [])
+    if not inventory:
+        return "📦 **Inventory:** Empty"
+    
+    # Count items
+    item_counts = {}
+    for item in inventory:
+        item_counts[item] = item_counts.get(item, 0) + 1
+    
+    # Format
+    lines = ["📦 **Inventory:**"]
+    for item, count in sorted(item_counts.items()):
+        if count > 1:
+            lines.append(f"  • {item} (×{count})")
+        else:
+            lines.append(f"  • {item}")
+    
+    return "\n".join(lines)
+
+
+# =============================================================================
+# CONDITION MANAGEMENT (Enhanced)
+# =============================================================================
+
+def apply_condition(user_id, condition_name, duration=None):
+    """Apply a condition with optional duration tracking."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    # Validate condition if data available
+    if EQUIPMENT_DATA_AVAILABLE:
+        condition = get_condition(condition_name)
+        if not condition and condition_name != "Exhaustion":
+            # Allow custom conditions
+            pass
+    
+    conditions = data.setdefault('conditions', [])
+    
+    # Check if already has condition
+    if condition_name in conditions:
+        return data, f"Already has {condition_name} condition"
+    
+    conditions.append(condition_name)
+    
+    # Track exhaustion level separately
+    if condition_name == "Exhaustion":
+        data['exhaustion_level'] = data.get('exhaustion_level', 0) + 1
+        if data['exhaustion_level'] >= 6:
+            conditions.append("Dead")
+            save_character(user_id, data)
+            return data, "💀 Exhaustion level 6 - Character has died"
+    
+    save_character(user_id, data)
+    
+    # Return condition effects
+    effects_msg = ""
+    if EQUIPMENT_DATA_AVAILABLE:
+        effects = get_condition_effects(condition_name)
+        if effects:
+            effect_list = []
+            if effects.get('attack_rolls') == 'disadvantage':
+                effect_list.append("Disadvantage on attacks")
+            if effects.get('ability_checks') == 'disadvantage':
+                effect_list.append("Disadvantage on ability checks")
+            if effects.get('speed') == 0:
+                effect_list.append("Speed reduced to 0")
+            if effects.get('incapacitated'):
+                effect_list.append("Incapacitated")
+            if effect_list:
+                effects_msg = f" Effects: {', '.join(effect_list)}"
+    
+    return data, f"Applied {condition_name} condition.{effects_msg}"
+
+
+def remove_condition_from_character(user_id, condition_name):
+    """Remove a condition from a character."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    conditions = data.get('conditions', [])
+    
+    if condition_name not in conditions:
+        return data, f"Doesn't have {condition_name} condition"
+    
+    conditions.remove(condition_name)
+    
+    # Handle exhaustion
+    if condition_name == "Exhaustion":
+        data['exhaustion_level'] = max(0, data.get('exhaustion_level', 1) - 1)
+        if data['exhaustion_level'] > 0:
+            # Still exhausted, add back
+            conditions.append("Exhaustion")
+    
+    save_character(user_id, data)
+    return data, f"Removed {condition_name} condition"
+
+
+def get_attack_roll_modifiers(user_id):
+    """Get advantage/disadvantage modifiers based on conditions."""
+    data = load_character(user_id)
+    if not data:
+        return None
+    
+    conditions = data.get('conditions', [])
+    
+    if EQUIPMENT_DATA_AVAILABLE:
+        return check_attack_modifiers(conditions)
+    
+    # Fallback
+    result = {"advantage": False, "disadvantage": False}
+    disadvantage_conditions = ["Blinded", "Frightened", "Poisoned", "Prone", "Restrained"]
+    advantage_conditions = ["Invisible"]
+    
+    for cond in conditions:
+        if cond in disadvantage_conditions:
+            result["disadvantage"] = True
+        if cond in advantage_conditions:
+            result["advantage"] = True
+    
+    return result
+
+
+def get_condition_summary(user_id):
+    """Get a summary of current conditions and their effects."""
+    data = load_character(user_id)
+    if not data:
+        return None
+    
+    conditions = data.get('conditions', [])
+    if not conditions:
+        return "✨ **Conditions:** None"
+    
+    lines = ["⚠️ **Conditions:**"]
+    
+    for cond in conditions:
+        if cond == "Exhaustion":
+            level = data.get('exhaustion_level', 1)
+            if EQUIPMENT_DATA_AVAILABLE:
+                effects = apply_exhaustion_effects(level)
+                lines.append(f"  • Exhaustion (Level {level}): {', '.join(effects)}")
+            else:
+                lines.append(f"  • Exhaustion (Level {level})")
+        else:
+            if EQUIPMENT_DATA_AVAILABLE:
+                condition_data = get_condition(cond)
+                if condition_data:
+                    lines.append(f"  • {cond}: {condition_data['description'][:100]}...")
+                else:
+                    lines.append(f"  • {cond}")
+            else:
+                lines.append(f"  • {cond}")
+    
+    return "\n".join(lines)
