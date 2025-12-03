@@ -108,14 +108,24 @@ import json as _json
 def generate_campaign(state, prompt=None):
     """
     Generate a new campaign setup using GPT-4o.
-    Optionally use a user prompt for inspiration.
-    Returns (campaign_text, updated_state)
+    Returns natural narration suitable for TTS, plus updates state with campaign details.
+    Returns (display_text, tts_text, updated_state)
     """
-    system_prompt = (
-        "You're a worldbuilder AI. Create a new D&D-style campaign intro."
-        " Respond in JSON with keys: campaign_title, realm, plot_hook, location, intro."
-    )
-    user_input = prompt if prompt else "Begin a new adventure"
+    system_prompt = """You are a Dungeon Master beginning a new D&D campaign. Create an exciting campaign opening.
+
+Your response must be valid JSON with these keys:
+- campaign_title: A dramatic campaign name (2-5 words)
+- realm: The world/setting name
+- location: Starting location name
+- plot_hook: One sentence hook (what draws adventurers in)
+- narration: 2-3 paragraphs of immersive scene-setting narration that a DM would read aloud to players. Write it as if you're speaking directly to the players at the table. End with a question or prompt to engage them.
+
+Example narration style:
+"The evening mist rolls through the cobblestone streets as you arrive at the village of Thornhaven. Lanterns flicker in windows, but the streets are eerily empty for this hour. A weathered notice board near the inn catches your eye - several pages flutter in the breeze, all bearing the same desperate message: 'MISSING - Reward Offered.' The innkeeper waves you inside urgently. What do you do?"
+
+Make it vivid, atmospheric, and end with something that invites player action."""
+
+    user_input = prompt if prompt else "Create an original fantasy adventure with an intriguing mystery"
     
     try:
         response = client.chat.completions.create(
@@ -124,45 +134,60 @@ def generate_campaign(state, prompt=None):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_input}
             ],
-            max_tokens=500,
-            temperature=0.8
+            max_tokens=600,
+            temperature=0.9
         )
-        campaign_text = response.choices[0].message.content
+        raw_response = response.choices[0].message.content
+        
+        # Try to extract JSON from response (handle markdown code blocks)
+        json_str = raw_response
+        if "```json" in raw_response:
+            json_str = raw_response.split("```json")[1].split("```")[0]
+        elif "```" in raw_response:
+            json_str = raw_response.split("```")[1].split("```")[0]
+        
+        data = _json.loads(json_str.strip())
+    except _json.JSONDecodeError:
+        # If JSON parsing fails, use the raw response as narration
+        data = {
+            "campaign_title": "The Adventure Begins",
+            "realm": "The Realm",
+            "location": "Starting Point",
+            "plot_hook": "Adventure awaits...",
+            "narration": raw_response if 'raw_response' in dir() else "You stand at the threshold of adventure. The path ahead is shrouded in mystery. What do you do?"
+        }
     except Exception as e:
         print(f"OpenAI API Error: {e}")
-        campaign_text = "{\"campaign_title\": \"Untitled Adventure\", \"realm\": \"Unknown Realm\", \"plot_hook\": \"\", \"location\": \"Nowhere\", \"intro\": \"A mysterious adventure awaits...\"}"
-
-    try:
-        data = _json.loads(campaign_text)
-    except Exception:
         data = {
-            "campaign_title": "Untitled Adventure",
-            "realm": "Unknown Realm",
-            "plot_hook": "",
+            "campaign_title": "The Adventure Begins",
+            "realm": "The Realm", 
             "location": "Starting Point",
-            "intro": campaign_text,
+            "plot_hook": "Adventure awaits...",
+            "narration": "You stand at the threshold of adventure. The path ahead is shrouded in mystery. What do you do?"
         }
 
+    # Update state
     state.update({
-        "campaign_title": data.get("campaign_title", "Untitled Adventure"),
-        "realm": data.get("realm", "Unknown Realm"),
+        "campaign_title": data.get("campaign_title", "The Adventure Begins"),
+        "realm": data.get("realm", "The Realm"),
         "plot_hook": data.get("plot_hook", ""),
         "location": data.get("location", "Starting Point"),
         "prompt_history": [],
     })
 
-    formatted = (
-        "=== NEW CAMPAIGN CREATED ===\n"
-        f"Title: {state['campaign_title']}\n"
-        f"Realm: {state['realm']}\n"
-        f"Starting Location: {state['location']}\n\n"
-        "[Plot Hook]\n"
-        f"{state['plot_hook']}\n\n"
-        "[Introduction]\n"
-        f"{data.get('intro', campaign_text)}"
+    narration = data.get("narration", "Your adventure begins...")
+    
+    # Display text (for Discord chat) - nicely formatted
+    display_text = (
+        f"# ⚔️ {state['campaign_title']}\n"
+        f"*{state['realm']} • {state['location']}*\n\n"
+        f"{narration}"
     )
+    
+    # TTS text (for voice) - just the narration, clean
+    tts_text = narration
 
-    return formatted, state
+    return display_text, tts_text, state
 
 
 def summarize_history(state, max_entries=10):

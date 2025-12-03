@@ -1,3 +1,8 @@
+"""
+AI Dungeon Master Discord Bot
+A voice-enabled D&D 5e experience using GPT-4o and TTS
+"""
+
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -13,7 +18,7 @@ from dotenv import load_dotenv
 from config import Config
 
 from services.openai_service import get_dm_response, generate_campaign, summarize_history
-from services.elevenlabs_service import text_to_speech, text_to_speech_async
+from services.elevenlabs_service import text_to_speech_async
 from utils.voice_parser import extract_voice_tag, clean_text
 from utils.voice_map import get_voice_id
 from utils.voice_manager import VoiceClientManager
@@ -26,7 +31,7 @@ from utils.state_manager import (
     set_current_turn_index,
 )
 from utils.prompt_builder import build_system_prompt
-from utils.dice_roller import roll_dice
+from utils.dice_roller import roll_dice, extract_inline_rolls
 from utils.logger import log_message, get_log_file
 from utils.character_manager import (
     register_character,
@@ -39,652 +44,564 @@ from utils.character_manager import (
     calculate_skill_bonus,
     get_ability_modifier,
 )
-from utils.combat_manager import start_combat, roll_initiative, next_turn, get_active_combatant, end_combat, load_combat, save_combat
+from utils.combat_manager import (
+    start_combat, roll_initiative, next_turn, 
+    get_active_combatant, end_combat, attack
+)
 
 load_dotenv()
 Config.validate()
 
 DISCORD_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
-DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Voice client manager to handle per-guild connections
+# Voice client manager
 voice_manager = VoiceClientManager()
 
-async def play_audio_in_voice(channel, audio_bytes):
-    """Play audio in the given voice channel using the manager."""
-    try:
-        await voice_manager.play(channel, audio_bytes)
-    except Exception as e:
-        print(f"Voice error: {e}")
 
-DICE_PATTERN = re.compile(r'roll (a |an )?(\d*d\d+([+-]\d+)?)', re.IGNORECASE)
-
-# --- User-Facing Slash Commands ---
-
-@bot.tree.command(name="register", description="Register your character.")
-async def register_slash(interaction: discord.Interaction, character_name: str):
-    user_id = str(interaction.user.id)
-    data = register_character(user_id, character_name)
-    await interaction.response.send_message(f"Character '{character_name}' registered for {interaction.user.display_name}.")
-    log_message(str(interaction.channel.id), interaction.user.display_name, f"Registered character: {character_name}")
-
-@bot.tree.command(name="setstat", description="Set a stat for your character.")
-async def setstat_slash(interaction: discord.Interaction, stat: str, value: int):
-    user_id = str(interaction.user.id)
-    result = set_stat(user_id, stat, value)
-    if result:
-        await interaction.response.send_message(f"Set {stat.upper()} to {value} for {interaction.user.display_name}.")
-        log_message(str(interaction.channel.id), interaction.user.display_name, f"Set {stat.upper()} to {value}")
-    else:
-        await interaction.response.send_message("Failed to set stat. Make sure you're registered and the stat is valid (STR/DEX/CON/INT/WIS/CHA).")
-
-@bot.tree.command(name="mystats", description="View your character's stats and inventory.")
-async def mystats_slash(interaction: discord.Interaction):
-    user_id = str(interaction.user.id)
-    summary = get_character_summary(user_id)
-    if summary:
-        await interaction.response.send_message(summary)
-    else:
-        await interaction.response.send_message("No character found. Use /register <name> first.")
-
-# ---- Inventory Commands ----
-inventory_group = app_commands.Group(name="inventory", description="Manage your inventory")
-
-@inventory_group.command(name="view", description="View your inventory")
-async def inventory_view(interaction: discord.Interaction):
-    user_id = str(interaction.user.id)
-    char = load_character(user_id)
-    if not char:
-        await interaction.response.send_message("No character found. Use /register <name> first.")
-        return
-    items = char.get('inventory', [])
-    if items:
-        await interaction.response.send_message("\n".join(f"- {i}" for i in items))
-    else:
-        await interaction.response.send_message("Inventory is empty.")
-
-
-@inventory_group.command(name="add", description="Add an item to your inventory")
-async def inventory_add_cmd(interaction: discord.Interaction, item: str):
-    user_id = str(interaction.user.id)
-    data = add_inventory(user_id, item)
-    if data:
-        await interaction.response.send_message(f"Added '{item}' to inventory.")
-        log_message(str(interaction.channel.id), interaction.user.display_name, f"Added to inventory: {item}")
-    else:
-        await interaction.response.send_message("No character found. Use /register <name> first.")
-
-
-@inventory_group.command(name="remove", description="Remove an item from your inventory")
-async def inventory_remove_cmd(interaction: discord.Interaction, item: str):
-    user_id = str(interaction.user.id)
-    data = remove_inventory(user_id, item)
-    if data:
-        await interaction.response.send_message(f"Removed '{item}' from inventory.")
-        log_message(str(interaction.channel.id), interaction.user.display_name, f"Removed from inventory: {item}")
-    else:
-        await interaction.response.send_message("Item not found or no character registered.")
-
-bot.tree.add_command(inventory_group)
-
-@bot.tree.command(name="roll", description="Roll dice or a skill check")
-@app_commands.describe(query="Dice notation (2d6+1) or skill name")
-async def roll_slash(interaction: discord.Interaction, query: str, adv: Optional[bool] = False, disadv: Optional[bool] = False):
-    user_id = str(interaction.user.id)
-    skill = query.lower()
-    if skill in SKILLS or skill.upper() in ['STR','DEX','CON','INT','WIS','CHA']:
-        char = load_character(user_id)
-        if not char:
-            await interaction.response.send_message("No character found. Use /register <name> first.")
-            return
-        if skill in SKILLS:
-            stat = SKILLS[skill]
-            mod = calculate_skill_bonus(char, skill)
-        else:
-            stat = skill.upper()
-            mod = get_ability_modifier(char.get(stat,10))
-
-        roll1 = random.randint(1,20)
-        if adv or disadv:
-            roll2 = random.randint(1,20)
-            result_roll = max(roll1, roll2) if adv else min(roll1, roll2)
-            rolls = f"{roll1} & {roll2}" + (" (adv)" if adv else " (disadv)")
-        else:
-            result_roll = roll1
-            rolls = str(roll1)
-
-        total = result_roll + mod
-        mod_str = f"+{mod}" if mod >=0 else str(mod)
-        msg = f"🎲 {interaction.user.display_name} rolls for {query.title()}: {total} (rolled {result_roll} {mod_str})"
-        await interaction.response.send_message(msg)
-        log_message(str(interaction.channel.id), interaction.user.display_name, msg)
-    else:
-        try:
-            total, rolls, modifier = roll_dice(query)
-            mod_str = f" {'+' if modifier >= 0 else '-'} {abs(modifier)} modifier" if modifier else ''
-            msg = f"**🎲 You rolled [{query}]: [{total}] (rolls: {', '.join(map(str, rolls))}{mod_str})**"
-            await interaction.response.send_message(msg)
-            log_message(str(interaction.channel.id), interaction.user.display_name, msg)
-        except Exception:
-            await interaction.response.send_message(f"Invalid dice or skill: {query}")
-
-@bot.tree.command(name="d20", description="Roll a d20 for skill checks")
-async def d20_slash(interaction: discord.Interaction):
-    """Roll a simple d20 for skill checks"""
-    result = random.randint(1, 20)
-    if result == 20:
-        msg = f"🎲 **Natural 20!** Critical Success!"
-    elif result == 1:
-        msg = f"🎲 **Natural 1!** Critical Failure!"
-    else:
-        msg = f"🎲 You rolled: **{result}**"
+async def play_tts(interaction, text: str, voice_tag: str = "Narrator"):
+    """Play TTS if enabled and user is in voice channel."""
+    channel_id = str(interaction.channel.id)
+    state = load_state(channel_id)
     
-    await interaction.response.send_message(msg)
-    log_message(str(interaction.channel.id), interaction.user.display_name, f"d20 roll: {result}")
-
-
-@bot.tree.command(name="save", description="Make a saving throw vs a DC")
-@app_commands.describe(stat="Ability", dc="Difficulty Class")
-async def save_slash(interaction: discord.Interaction, stat: str, dc: int, adv: Optional[bool] = False, disadv: Optional[bool] = False):
-    user_id = str(interaction.user.id)
-    char = load_character(user_id)
-    if not char:
-        await interaction.response.send_message("No character found. Use /register <name> first.")
+    if not state.get("tts_enabled", True):
         return
-
-    stat_up = stat.upper()
-    if stat_up not in ['STR','DEX','CON','INT','WIS','CHA']:
-        await interaction.response.send_message("Invalid ability. Use STR/DEX/CON/INT/WIS/CHA.")
-        return
-    mod = get_ability_modifier(char.get(stat_up,10))
-    roll1 = random.randint(1,20)
-    if adv or disadv:
-        roll2 = random.randint(1,20)
-        result_roll = max(roll1, roll2) if adv else min(roll1, roll2)
-    else:
-        result_roll = roll1
-    total = result_roll + mod
-    success = total >= dc
-    mod_str = f"+{mod}" if mod >=0 else str(mod)
-    status = "Success" if success else "Failure"
-    msg = f"🛡️ {interaction.user.display_name} makes a {stat_up} saving throw vs DC {dc}: {total} (rolled {result_roll} {mod_str}) → {status}!"
-    await interaction.response.send_message(msg)
-    log_message(str(interaction.channel.id), interaction.user.display_name, msg)
-
-@bot.tree.command(name="attack", description="Attack a target in combat")
-@app_commands.describe(target="Target name", bonus="Attack bonus", damage="Damage dice e.g. 1d8+2")
-async def attack_slash(interaction: discord.Interaction, target: str, bonus: int, damage: str):
-    channel_id = str(interaction.channel.id)
-    from utils.combat_manager import attack
-    result = attack(channel_id, str(interaction.user.id), target, bonus, damage)
-    if not result:
-        await interaction.response.send_message("No combat in progress or target not found.")
-        return
-    if result['hit']:
-        msg = f"{interaction.user.display_name} hits {target} for {result['damage']} damage! ({result['target_hp']} HP left)"
-    else:
-        msg = f"{interaction.user.display_name} misses {target}! (Roll {result['roll']})"
-    await interaction.response.send_message(msg)
-    log_message(channel_id, interaction.user.display_name, msg)
-
-@bot.tree.command(name="cast", description="Cast a spell at a target")
-@app_commands.describe(spell="Spell name", target="Target name", bonus="Spell attack bonus", damage="Damage dice")
-async def cast_slash(interaction: discord.Interaction, spell: str, target: str, bonus: int, damage: str):
-    channel_id = str(interaction.channel.id)
-    from utils.combat_manager import attack
-    result = attack(channel_id, str(interaction.user.id), target, bonus, damage)
-    if not result:
-        await interaction.response.send_message("No combat in progress or target not found.")
-        return
-    if result['hit']:
-        msg = f"{interaction.user.display_name} casts {spell} and hits {target} for {result['damage']} damage! ({result['target_hp']} HP left)"
-    else:
-        msg = f"{interaction.user.display_name} casts {spell} but misses {target}! (Roll {result['roll']})"
-    await interaction.response.send_message(msg)
-    log_message(channel_id, interaction.user.display_name, msg)
-
-@bot.tree.command(name="exportlog", description="Export the session log as a zip file.")
-async def exportlog_slash(interaction: discord.Interaction):
-    session_id = str(interaction.channel.id)
-    log_path = get_log_file(session_id)
-    if not log_path:
-        await interaction.response.send_message("No log found for this session.")
-        return
-    zip_path = log_path + '.zip'
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        zipf.write(log_path, os.path.basename(log_path))
-    await interaction.response.send_message(file=discord.File(zip_path))
-    os.unlink(zip_path)
-
-@bot.tree.command(name="combat", description="Start or end combat. Usage: /combat start enemy1:20:12 enemy2:15:10 or /combat end")
-async def combat_slash(interaction: discord.Interaction, action: str, enemies: Optional[str] = None):
-    channel_id = str(interaction.channel.id)
-    if action == 'start':
-        # Example: /combat start enemy1:20:12 enemy2:15:10
-        players = [(str(m.id), m.display_name) for m in interaction.channel.members if not m.bot]
-        enemies_list = []
-        if enemies:
-            for arg in enemies.split():
-                parts = arg.split(':')
-                if len(parts) == 3:
-                    enemies_list.append({'name': parts[0], 'hp': int(parts[1]), 'ac': int(parts[2])})
-        state = start_combat(channel_id, players, enemies_list)
-        await interaction.response.send_message(f"Combat started! Players: {', '.join(p[1] for p in players)}. Enemies: {', '.join(e['name'] for e in enemies_list)}.")
-        log_message(channel_id, "DM", f"Combat started with {len(players)} players and {len(enemies_list)} enemies")
-    elif action == 'end':
-        end_combat(channel_id)
-        await interaction.response.send_message("Combat ended.")
-        log_message(channel_id, "DM", "Combat ended")
-    else:
-        await interaction.response.send_message("Usage: /combat start [enemy1:hp:ac ...] or /combat end")
-
-@bot.tree.command(name="initiative", description="Roll initiative for all combatants.")
-async def initiative_slash(interaction: discord.Interaction):
-    channel_id = str(interaction.channel.id)
-    state = roll_initiative(channel_id)
-    if not state:
-        await interaction.response.send_message("No combat in progress.")
-        return
-    order = [f"{c['name']} ({c['initiative']})" for c in state['turn_order']]
-    await interaction.response.send_message(f"Initiative order: {', '.join(order)}. {state['turn_order'][0]['name']}'s turn!")
-    log_message(channel_id, "DM", f"Initiative rolled: {', '.join(order)}")
-
-@bot.tree.command(name="next", description="Advance to the next combatant's turn.")
-async def next_turn_slash(interaction: discord.Interaction):
-    channel_id = str(interaction.channel.id)
-    state = next_turn(channel_id)
-    if not state:
-        await interaction.response.send_message("No combat in progress.")
-        return
-    active = get_active_combatant(channel_id)
-    if not active:
-        await interaction.response.send_message("No active combatant.")
-        return
-    await interaction.response.send_message(f"It's now {active['name']}'s turn! HP: {active.get('hp', '?')} | AC: {active.get('ac', '?')} | Status: {', '.join(active.get('status', [])) if active.get('status') else 'None'}")
-    log_message(channel_id, "DM", f"Turn advanced to {active['name']}")
-
-@bot.event
-async def on_ready():
-    print(f'{bot.user} has connected to Discord!')
     
-    # Wait a moment for all commands to be registered
-    import asyncio
-    await asyncio.sleep(2)
-    
-    # Check how many commands we have
-    global_commands = list(bot.tree._global_commands.values())
-    print(f"📋 Commands in tree: {len(global_commands)}")
-    for cmd in global_commands:
-        print(f"  • {cmd.name}: {cmd.description}")
-    
-    # Use GLOBAL sync instead of guild sync to avoid "Unknown Integration" errors
-    try:
-        print("🌍 Syncing commands globally...")
-        synced = await bot.tree.sync()
-        print(f"✅ Successfully synced {len(synced)} global commands!")
-        
-        for cmd in synced:
-            print(f"  ✅ {cmd.name}")
-            
-        print("🎉 All commands should now work in all servers!")
-        
-    except Exception as e:
-        print(f"❌ Global sync failed: {e}")
-        import traceback
-        traceback.print_exc()
-
-@bot.tree.command(name="sync_now", description="Manually sync slash commands (admin only)")
-async def sync_now(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.followup.send("You must be an admin to use this command.", ephemeral=True)
+    if not (interaction.user.voice and interaction.user.voice.channel):
         return
     
     try:
-        print("🔄 Manual sync triggered...")
-        synced = await bot.tree.sync()
-        await interaction.followup.send(f"✅ Successfully synced {len(synced)} global commands!", ephemeral=True)
-        print(f"✅ Manual sync complete: {len(synced)} commands")
+        voice_id = get_voice_id(voice_tag)
+        audio_bytes = await text_to_speech_async(text, voice_id)
+        if audio_bytes:
+            await voice_manager.play(interaction.user.voice.channel, audio_bytes)
     except Exception as e:
-        await interaction.followup.send(f"❌ Sync failed: {e}", ephemeral=True)
-        print(f"❌ Manual sync failed: {e}")
+        print(f"TTS Error: {e}")
 
-@bot.tree.command(name="nuclear_sync", description="Nuclear option: completely clear and re-sync commands (admin only)")
-async def nuclear_sync_command(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.followup.send("You must be an admin to use this command.", ephemeral=True)
-        return
-    
-    try:
-        from utils.command_sync import nuclear_sync
-        await nuclear_sync(bot, DEV_GUILD_ID)
-        await interaction.followup.send("💥 Nuclear sync completed! All commands cleared and re-registered.", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"❌ Nuclear sync failed: {e}", ephemeral=True)
 
-@bot.tree.command(name="new_campaign", description="Start a new campaign and set turn order.")
-async def new_campaign(interaction: discord.Interaction, prompt: str = ""):
+# =============================================================================
+# CAMPAIGN COMMANDS
+# =============================================================================
+
+@bot.tree.command(name="campaign", description="Start a new D&D campaign")
+@app_commands.describe(theme="Optional theme like 'pirates', 'horror', 'mystery in a castle'")
+async def campaign_start(interaction: discord.Interaction, theme: str = ""):
+    """Start a new campaign with players in your voice channel."""
     channel_id = str(interaction.channel.id)
     state = load_state(channel_id)
     await interaction.response.defer()
     
-    # Detect all users in the initiator's voice channel (ignore bots)
+    # Check voice channel
     if not (interaction.user.voice and interaction.user.voice.channel):
-        await interaction.followup.send("⚠️ You must be in a voice channel to start a campaign.")
+        await interaction.followup.send("🎤 Join a voice channel first, then start the campaign!")
         return
     
+    # Get players from voice channel
     members = [m for m in interaction.user.voice.channel.members if not m.bot]
     if not members:
-        await interaction.followup.send("⚠️ No players in your voice channel.")
+        await interaction.followup.send("👥 No players found in your voice channel.")
         return
     
+    # Randomize turn order
     random.shuffle(members)
     turn_order = [str(m.id) for m in members]
+    
+    # Generate campaign
+    display_text, tts_text, state = generate_campaign(state, theme if theme else None)
+    
+    # Update state
     set_turn_order(state, turn_order)
     set_current_turn_index(state, 0)
     state["players"] = turn_order
-    state["tts_enabled"] = state.get("tts_enabled", True)  # Enable TTS by default
-    
-    # Generate campaign intro and state details
-    campaign_text, state = generate_campaign(state, prompt if prompt else None)
-
-    # Save campaign and turn order
+    state["tts_enabled"] = state.get("tts_enabled", True)
     save_state(channel_id, state)
     
     # Build player list
-    player_list = "\n".join([f"• <@{pid}>" for pid in turn_order])
+    player_names = []
+    for pid in turn_order:
+        char = load_character(pid)
+        if char:
+            player_names.append(f"<@{pid}> as **{char['name']}**")
+        else:
+            player_names.append(f"<@{pid}>")
     
-    # Announce campaign and first player
-    first_player_id = turn_order[0]
-    first_player_mention = f"<@{first_player_id}>"
-    
+    # Send campaign intro
+    first_player = f"<@{turn_order[0]}>"
     output = (
-        f"{campaign_text}\n\n"
-        f"**🎭 Players ({len(turn_order)}):**\n{player_list}\n\n"
-        f"➡️ {first_player_mention}, you're up first! Use `/act <action>` to begin."
+        f"{display_text}\n\n"
+        f"───────────────────────\n"
+        f"**Party:** {' • '.join(player_names)}\n\n"
+        f"🎲 {first_player}, you're up first! Use `/do` to take an action."
     )
     
     await interaction.followup.send(output)
-    log_message(channel_id, "DM", f"New campaign started with {len(turn_order)} players")
+    log_message(channel_id, "DM", f"Campaign started: {state.get('campaign_title')}")
     
-    # Play audio if TTS enabled
-    if state.get("tts_enabled", True) and interaction.user.voice and interaction.user.voice.channel:
-        tts_text = clean_text(campaign_text)
-        voice_id = get_voice_id("Narrator")
-        try:
-            audio_bytes = await text_to_speech_async(tts_text, voice_id)
-            if audio_bytes:
-                await play_audio_in_voice(interaction.user.voice.channel, audio_bytes)
-        except Exception as e:
-            print(f"TTS Error: {e}")
+    # Play TTS
+    await play_tts(interaction, tts_text, "Narrator")
 
 
-@bot.tree.command(name="whereami", description="Show your current campaign location")
-async def whereami(interaction: discord.Interaction):
-    channel_id = str(interaction.channel.id)
-    state = load_state(channel_id)
-    if not state.get("campaign_title"):
-        await interaction.response.send_message("No campaign in progress. Use /new_campaign to start one.")
-        return
-
-    msg = (
-        f"\U0001F5FA\uFE0F You're currently in the campaign {state.get('campaign_title')}, "
-        f"located in {state.get('realm')}, at {state.get('location')}."
-    )
-    await interaction.response.send_message(msg)
-
-
-@bot.tree.command(name="recap", description="Summarize recent campaign events")
-async def recap_slash(interaction: discord.Interaction):
-    channel_id = str(interaction.channel.id)
-    state = load_state(channel_id)
-    if not state.get("campaign_title"):
-        await interaction.response.send_message("No campaign in progress.")
-        return
-    summary = summarize_history(state)
-    await interaction.response.send_message(f"📘 {summary}")
-
-
-@bot.tree.command(name="campaignstate", description="Dump internal campaign state (debug)")
-async def campaignstate(interaction: discord.Interaction):
-    channel_id = str(interaction.channel.id)
-    state = load_state(channel_id)
-    await interaction.response.send_message(f"```json\n{json.dumps(state, indent=2)}\n```", ephemeral=True)
-
-
-@bot.tree.command(name="set-difficulty", description="Set campaign difficulty")
-async def set_difficulty(interaction: discord.Interaction, level: str):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Admins only.", ephemeral=True)
-        return
-    channel_id = str(interaction.channel.id)
-    state = load_state(channel_id)
-    level = level.lower()
-    if level not in ["easy", "normal", "hard"]:
-        await interaction.response.send_message("Level must be easy, normal, or hard.", ephemeral=True)
-        return
-    state["difficulty"] = level
-    save_state(channel_id, state)
-    await interaction.response.send_message(f"Difficulty set to {level}.")
-
-
-@bot.tree.command(name="set_auto_advance", description="Toggle automatic turn advancement")
-async def set_auto_advance(interaction: discord.Interaction, enabled: bool):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Admins only.", ephemeral=True)
-        return
-    channel_id = str(interaction.channel.id)
-    state = load_state(channel_id)
-    state["auto_advance"] = enabled
-    save_state(channel_id, state)
-    await interaction.response.send_message(f"Auto-advance set to {enabled}")
-
-
-@bot.tree.command(name="tts", description="Toggle text-to-speech for this channel")
-async def tts_toggle(interaction: discord.Interaction, enabled: bool):
-    """Toggle TTS on/off for the current channel to save ElevenLabs credits."""
-    channel_id = str(interaction.channel.id)
-    state = load_state(channel_id)
-    state["tts_enabled"] = enabled
-    save_state(channel_id, state)
-    
-    status = "🔊 enabled" if enabled else "🔇 disabled"
-    await interaction.response.send_message(f"Voice narration is now {status} for this channel.")
-
-
-@bot.tree.command(name="leave_voice", description="Disconnect the bot from voice channel")
-async def leave_voice(interaction: discord.Interaction):
-    """Manually disconnect the bot from voice to save resources."""
-    if interaction.guild:
-        await voice_manager.disconnect(interaction.guild.id)
-        await interaction.response.send_message("👋 Left the voice channel.")
-    else:
-        await interaction.response.send_message("Not in a guild.", ephemeral=True)
-
-@bot.tree.command(name="act", description="Take your turn in the campaign.")
-async def act(interaction: discord.Interaction, action: str):
+@bot.tree.command(name="do", description="Describe what your character does")
+@app_commands.describe(action="What does your character do?")
+async def do_action(interaction: discord.Interaction, action: str):
+    """Take an action in the campaign."""
     channel_id = str(interaction.channel.id)
     state = load_state(channel_id)
     turn_order = state.get("turn_order", [])
     current_index = state.get("current_turn_index", 0)
 
     if not turn_order:
-        await interaction.response.send_message("No campaign in progress. Use /new_campaign to start.")
+        await interaction.response.send_message("No campaign running. Use `/campaign` to start one!")
         return
 
+    # Check if it's this player's turn
     current_player_id = turn_order[current_index]
     if str(interaction.user.id) != current_player_id:
-        await interaction.response.send_message("It's not your turn!")
+        current_player = f"<@{current_player_id}>"
+        await interaction.response.send_message(f"⏳ It's {current_player}'s turn right now.", ephemeral=True)
         return
 
     await interaction.response.defer()
 
-    # Inline dice rolls like "I strike for [1d8+2] damage"
-    from utils.dice_roller import extract_inline_rolls
+    # Process inline dice rolls [1d20+5]
     rolls = extract_inline_rolls(action)
     for notation, result in rolls.items():
-        action = action.replace(f"[{notation}]", f"[{notation}={result}]")
+        action = action.replace(f"[{notation}]", f"**{result}** ({notation})")
 
-    # Build system prompt from current state
+    # Get character name
+    char = load_character(str(interaction.user.id))
+    char_name = char.get('name', interaction.user.display_name) if char else interaction.user.display_name
+
+    # Build system prompt and get AI response
     system_prompt = build_system_prompt(state)
-
-    # Get the AI narration using get_dm_response
-    narration, updated_state = get_dm_response(action, state, current_player_id, system_prompt=system_prompt)
+    narration, updated_state = get_dm_response(action, state, str(interaction.user.id), system_prompt=system_prompt)
+    
+    # Process loot
     loot_items = updated_state.pop('recent_loot', [])
     voice_tag = extract_voice_tag(narration)
     text = clean_text(narration)
 
-    # Check if TTS is enabled for this channel
-    tts_enabled = state.get("tts_enabled", True)
-
-    # Format output - cleaner with action suggestions
-    output = f"🎭 **{interaction.user.display_name}:** {action}\n\n"
-    output += f"📜 **Narrator:**\n{text}\n"
+    # Format output
+    output = f"**{char_name}:** *{action}*\n\n{text}"
     
-    # Add loot notifications if any
+    # Add loot notifications
     for item in loot_items:
-        add_inventory(current_player_id, item)
-        output += f"\n🎒 *You obtained: {item}*"
+        add_inventory(str(interaction.user.id), item)
+        output += f"\n\n🎒 *{char_name} obtained: {item}*"
 
     await interaction.followup.send(output)
     
-    # Play voice narration if TTS enabled and in voice channel
-    if tts_enabled and interaction.user.voice and interaction.user.voice.channel:
-        try:
-            audio_bytes = await text_to_speech_async(text, get_voice_id(voice_tag))
-            if audio_bytes:
-                await play_audio_in_voice(interaction.user.voice.channel, audio_bytes)
-        except Exception as e:
-            print(f"TTS Error: {e}")
+    # Play TTS
+    await play_tts(interaction, text, voice_tag)
 
-    # Handle auto-advance or prompt for end_turn
+    # Auto-advance or remind about /done
     if state.get("auto_advance"):
-        idx = get_current_turn_index(updated_state)
-        next_idx = (idx + 1) % len(turn_order)
+        next_idx = (current_index + 1) % len(turn_order)
         set_current_turn_index(updated_state, next_idx)
-        next_player_id = turn_order[next_idx]
-        next_player_mention = f"<@{next_player_id}>"
-        await interaction.followup.send(f"➡️ {next_player_mention}, it's your turn. What do you do?")
-    else:
-        # Remind player they can end turn or continue
-        await interaction.followup.send(f"💡 *Use `/end_turn` to pass to the next player, or `/act` again to continue your turn.*")
-
+        next_player = f"<@{turn_order[next_idx]}>"
+        await interaction.followup.send(f"➡️ {next_player}, your turn!")
+    
     save_state(channel_id, updated_state)
-    log_message(channel_id, interaction.user.display_name, action)
-    log_message(channel_id, "Narrator", text)
+    log_message(channel_id, char_name, action)
+    log_message(channel_id, "DM", text)
 
-@bot.tree.command(name="end_turn", description="End your turn and advance to the next player.")
+
+@bot.tree.command(name="say", description="Say something in character")
+@app_commands.describe(speech="What does your character say?")
+async def say_action(interaction: discord.Interaction, speech: str):
+    """Speak as your character."""
+    channel_id = str(interaction.channel.id)
+    state = load_state(channel_id)
+    
+    if not state.get("campaign_title"):
+        await interaction.response.send_message("No campaign running. Use `/campaign` to start!")
+        return
+    
+    char = load_character(str(interaction.user.id))
+    char_name = char.get('name', interaction.user.display_name) if char else interaction.user.display_name
+    
+    await interaction.response.send_message(f'**{char_name}:** "{speech}"')
+    log_message(channel_id, char_name, f'"{speech}"')
+
+
+@bot.tree.command(name="done", description="End your turn")
 async def end_turn(interaction: discord.Interaction):
+    """Pass the turn to the next player."""
     channel_id = str(interaction.channel.id)
     state = load_state(channel_id)
     turn_order = get_turn_order(state)
     idx = get_current_turn_index(state)
     
-    if not turn_order or idx >= len(turn_order):
-        await interaction.response.send_message("No campaign in progress.")
+    if not turn_order:
+        await interaction.response.send_message("No campaign running.")
         return
     
     current_player_id = turn_order[idx]
     if str(interaction.user.id) != current_player_id:
-        await interaction.response.send_message("It's not your turn!")
+        await interaction.response.send_message("It's not your turn!", ephemeral=True)
         return
     
     # Advance turn
     next_idx = (idx + 1) % len(turn_order)
     set_current_turn_index(state, next_idx)
     save_state(channel_id, state)
-    next_player_id = turn_order[next_idx]
-    next_player_mention = f"<@{next_player_id}>"
     
-    # Get next player's character name if registered
-    from utils.character_manager import load_character
+    next_player_id = turn_order[next_idx]
     next_char = load_character(next_player_id)
     char_name = next_char.get('name', 'adventurer') if next_char else 'adventurer'
     
-    msg = f"➡️ {next_player_mention}, it's your turn! What does **{char_name}** do?"
+    await interaction.response.send_message(f"➡️ <@{next_player_id}>, it's your turn! What does **{char_name}** do?")
+    log_message(channel_id, "DM", f"Turn passed to {char_name}")
     
-    await interaction.response.send_message(msg)
-    log_message(channel_id, "DM", f"Turn passed to {next_player_mention}")
-    
-    # Play voice line if TTS enabled
-    if state.get("tts_enabled", True) and interaction.user.voice and interaction.user.voice.channel:
-        voice_id = get_voice_id("Narrator")
-        try:
-            audio_bytes = await text_to_speech_async(f"It's your turn, {char_name}. What do you do?", voice_id)
-            if audio_bytes:
-                await play_audio_in_voice(interaction.user.voice.channel, audio_bytes)
-        except Exception as e:
-            print(f"TTS Error: {e}")
+    await play_tts(interaction, f"Your turn, {char_name}. What do you do?", "Narrator")
 
-@bot.tree.command(name="start_adventure", description="Generate a new campaign setup with an optional prompt")
-async def start_adventure(interaction: discord.Interaction, prompt: str = ""):
+
+@bot.tree.command(name="status", description="Show current campaign status")
+async def status(interaction: discord.Interaction):
+    """Display campaign and party status."""
     channel_id = str(interaction.channel.id)
     state = load_state(channel_id)
-    await interaction.response.defer()
     
-    # Generate campaign
-    campaign_text, state = generate_campaign(state, prompt if prompt else None)
-    save_state(channel_id, state)
-    
-    await interaction.followup.send(campaign_text)
-    log_message(channel_id, "DM", f"New adventure started: {state.get('campaign_title', 'Untitled')}")
-    
-    # Play audio if TTS enabled and in voice channel
-    if state.get("tts_enabled", True) and interaction.user.voice and interaction.user.voice.channel:
-        tts_text = clean_text(campaign_text)
-        voice_id = get_voice_id("Narrator")
-        try:
-            audio_bytes = await text_to_speech_async(tts_text, voice_id)
-            if audio_bytes:
-                await play_audio_in_voice(interaction.user.voice.channel, audio_bytes)
-        except Exception as e:
-            print(f"TTS Error: {e}")
-
-@bot.tree.command(name="check_commands", description="Check current command registration status (admin only)")
-async def check_commands(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.followup.send("You must be an admin to use this command.", ephemeral=True)
+    if not state.get("campaign_title"):
+        await interaction.response.send_message("No campaign running. Use `/campaign` to start one!")
         return
     
-    try:
-        # Check guild commands
-        guild_commands = []
-        if DEV_GUILD_ID:
-            guild = discord.Object(id=int(DEV_GUILD_ID))
-            guild_commands = await bot.tree.fetch_commands(guild=guild)
-        
-        # Check global commands
-        global_commands = await bot.tree.fetch_commands()
-        
-        # Build status message
-        status_msg = "📊 **Command Registration Status**\n\n"
-        
-        if DEV_GUILD_ID:
-            status_msg += f"**Guild Commands ({len(guild_commands)}):**\n"
-            if guild_commands:
-                for cmd in guild_commands:
-                    status_msg += f"• {cmd.name}\n"
-            else:
-                status_msg += "• No guild commands registered\n"
-            status_msg += "\n"
-        
-        status_msg += f"**Global Commands ({len(global_commands)}):**\n"
-        if global_commands:
-            for cmd in global_commands:
-                status_msg += f"• {cmd.name}\n"
+    turn_order = state.get("turn_order", [])
+    current_idx = state.get("current_turn_index", 0)
+    current_player = turn_order[current_idx] if turn_order else None
+    
+    # Build party status
+    party_status = []
+    for i, pid in enumerate(turn_order):
+        char = load_character(pid)
+        if char:
+            hp = f"HP: {char.get('hp', '?')}/{char.get('max_hp', '?')}"
+            indicator = "▶️ " if i == current_idx else "  "
+            party_status.append(f"{indicator}**{char['name']}** - {hp}")
         else:
-            status_msg += "• No global commands registered\n"
+            indicator = "▶️ " if i == current_idx else "  "
+            party_status.append(f"{indicator}<@{pid}>")
+    
+    output = (
+        f"# 📜 {state.get('campaign_title')}\n"
+        f"*{state.get('realm')} • {state.get('location')}*\n\n"
+        f"**Party:**\n" + "\n".join(party_status) + "\n\n"
+        f"🎲 Current turn: <@{current_player}>" if current_player else ""
+    )
+    
+    await interaction.response.send_message(output)
+
+
+@bot.tree.command(name="recap", description="Get a summary of recent events")
+async def recap(interaction: discord.Interaction):
+    """Summarize what happened recently."""
+    channel_id = str(interaction.channel.id)
+    state = load_state(channel_id)
+    
+    if not state.get("campaign_title"):
+        await interaction.response.send_message("No campaign running.")
+        return
+    
+    await interaction.response.defer()
+    summary = summarize_history(state)
+    await interaction.followup.send(f"📖 **Previously...**\n\n{summary}")
+
+
+# =============================================================================
+# CHARACTER COMMANDS
+# =============================================================================
+
+@bot.tree.command(name="character", description="Create or view your character")
+@app_commands.describe(name="Character name (leave blank to view current)")
+async def character_cmd(interaction: discord.Interaction, name: str = ""):
+    """Create a new character or view your current one."""
+    user_id = str(interaction.user.id)
+    
+    if name:
+        # Create/update character
+        register_character(user_id, name)
+        await interaction.response.send_message(f"✨ Character **{name}** created! Use `/stats` to set your abilities.")
+    else:
+        # View character
+        summary = get_character_summary(user_id)
+        if summary:
+            await interaction.response.send_message(summary)
+        else:
+            await interaction.response.send_message("No character yet. Use `/character <name>` to create one!")
+
+
+@bot.tree.command(name="stats", description="Set your character's stats")
+@app_commands.describe(
+    strength="STR (1-20)", dexterity="DEX (1-20)", constitution="CON (1-20)",
+    intelligence="INT (1-20)", wisdom="WIS (1-20)", charisma="CHA (1-20)"
+)
+async def set_stats(
+    interaction: discord.Interaction,
+    strength: Optional[int] = None,
+    dexterity: Optional[int] = None, 
+    constitution: Optional[int] = None,
+    intelligence: Optional[int] = None,
+    wisdom: Optional[int] = None,
+    charisma: Optional[int] = None
+):
+    """Set multiple stats at once."""
+    user_id = str(interaction.user.id)
+    char = load_character(user_id)
+    
+    if not char:
+        await interaction.response.send_message("Create a character first with `/character <name>`")
+        return
+    
+    updates = []
+    if strength: set_stat(user_id, "STR", strength); updates.append(f"STR: {strength}")
+    if dexterity: set_stat(user_id, "DEX", dexterity); updates.append(f"DEX: {dexterity}")
+    if constitution: set_stat(user_id, "CON", constitution); updates.append(f"CON: {constitution}")
+    if intelligence: set_stat(user_id, "INT", intelligence); updates.append(f"INT: {intelligence}")
+    if wisdom: set_stat(user_id, "WIS", wisdom); updates.append(f"WIS: {wisdom}")
+    if charisma: set_stat(user_id, "CHA", charisma); updates.append(f"CHA: {charisma}")
+    
+    if updates:
+        await interaction.response.send_message(f"📊 Updated: {', '.join(updates)}")
+    else:
+        await interaction.response.send_message("Provide at least one stat to update!", ephemeral=True)
+
+
+# =============================================================================
+# DICE COMMANDS
+# =============================================================================
+
+@bot.tree.command(name="roll", description="Roll dice (e.g., 1d20, 2d6+3, athletics)")
+@app_commands.describe(dice="Dice notation or skill name", advantage="Roll with advantage", disadvantage="Roll with disadvantage")
+async def roll_cmd(interaction: discord.Interaction, dice: str, advantage: bool = False, disadvantage: bool = False):
+    """Roll dice or make a skill check."""
+    user_id = str(interaction.user.id)
+    char = load_character(user_id)
+    char_name = char.get('name', interaction.user.display_name) if char else interaction.user.display_name
+    skill = dice.lower()
+    
+    # Check if it's a skill/ability check
+    if skill in SKILLS or skill.upper() in ['STR','DEX','CON','INT','WIS','CHA']:
+        if not char:
+            await interaction.response.send_message("Create a character first to use skill checks!")
+            return
         
-        await interaction.followup.send(status_msg, ephemeral=True)
+        if skill in SKILLS:
+            mod = calculate_skill_bonus(char, skill)
+            skill_name = skill.title()
+        else:
+            mod = get_ability_modifier(char.get(skill.upper(), 10))
+            skill_name = skill.upper()
         
+        # Roll with advantage/disadvantage
+        roll1 = random.randint(1, 20)
+        roll2 = random.randint(1, 20) if (advantage or disadvantage) else roll1
+        
+        if advantage:
+            result = max(roll1, roll2)
+            roll_info = f"({roll1}, {roll2} → {result})"
+        elif disadvantage:
+            result = min(roll1, roll2)
+            roll_info = f"({roll1}, {roll2} → {result})"
+        else:
+            result = roll1
+            roll_info = f"({result})"
+        
+        total = result + mod
+        mod_str = f"+{mod}" if mod >= 0 else str(mod)
+        
+        # Check for nat 20/1
+        crit = " 🌟 **Critical!**" if result == 20 else " 💀 **Critical Fail!**" if result == 1 else ""
+        
+        msg = f"🎲 **{char_name}** rolls {skill_name}: **{total}** {roll_info} {mod_str}{crit}"
+    else:
+        # Regular dice roll
+        try:
+            total, rolls, modifier = roll_dice(dice)
+            rolls_str = ', '.join(map(str, rolls))
+            mod_str = f" + {modifier}" if modifier > 0 else f" - {abs(modifier)}" if modifier < 0 else ""
+            msg = f"🎲 **{char_name}** rolls {dice}: **{total}** ({rolls_str}{mod_str})"
+        except:
+            await interaction.response.send_message(f"❌ Invalid dice: {dice}", ephemeral=True)
+            return
+    
+    await interaction.response.send_message(msg)
+    log_message(str(interaction.channel.id), char_name, msg)
+
+
+# =============================================================================
+# COMBAT COMMANDS
+# =============================================================================
+
+@bot.tree.command(name="fight", description="Start combat with enemies")
+@app_commands.describe(enemies="Enemies in format: goblin:15:13 orc:25:14 (name:hp:ac)")
+async def fight_start(interaction: discord.Interaction, enemies: str):
+    """Start a combat encounter."""
+    channel_id = str(interaction.channel.id)
+    
+    # Parse enemies
+    enemy_list = []
+    for enemy in enemies.split():
+        parts = enemy.split(':')
+        if len(parts) >= 3:
+            enemy_list.append({
+                'name': parts[0].title(),
+                'hp': int(parts[1]),
+                'ac': int(parts[2])
+            })
+    
+    if not enemy_list:
+        await interaction.response.send_message("Format: `/fight goblin:15:13 orc:25:14`", ephemeral=True)
+        return
+    
+    # Get players
+    state = load_state(channel_id)
+    players = [(pid, load_character(pid).get('name', f'Player') if load_character(pid) else 'Player') 
+               for pid in state.get('players', [])]
+    
+    combat_state = start_combat(channel_id, players, enemy_list)
+    
+    # Roll initiative
+    init_state = roll_initiative(channel_id)
+    order = [f"{c['name']} ({c['initiative']})" for c in init_state['turn_order']]
+    
+    enemy_names = ', '.join(e['name'] for e in enemy_list)
+    await interaction.response.send_message(
+        f"⚔️ **COMBAT BEGINS!**\n"
+        f"Enemies: {enemy_names}\n\n"
+        f"**Initiative:** {' → '.join(order)}\n\n"
+        f"First up: **{init_state['turn_order'][0]['name']}**!"
+    )
+
+
+@bot.tree.command(name="attack", description="Attack a target")
+@app_commands.describe(target="Target name", bonus="Attack bonus (e.g., 5)", damage="Damage dice (e.g., 1d8+3)")
+async def attack_cmd(interaction: discord.Interaction, target: str, bonus: int, damage: str):
+    """Make an attack roll against a target."""
+    channel_id = str(interaction.channel.id)
+    char = load_character(str(interaction.user.id))
+    char_name = char.get('name', interaction.user.display_name) if char else interaction.user.display_name
+    
+    result = attack(channel_id, str(interaction.user.id), target, bonus, damage)
+    
+    if not result:
+        await interaction.response.send_message("No combat or target not found!", ephemeral=True)
+        return
+    
+    if result['hit']:
+        msg = f"⚔️ **{char_name}** hits **{target}** for **{result['damage']}** damage! ({result['target_hp']} HP remaining)"
+    else:
+        msg = f"⚔️ **{char_name}** attacks **{target}**... and misses! (Rolled {result['roll']})"
+    
+    await interaction.response.send_message(msg)
+
+
+@bot.tree.command(name="endcombat", description="End the current combat")
+async def end_combat_cmd(interaction: discord.Interaction):
+    """End the combat encounter."""
+    channel_id = str(interaction.channel.id)
+    end_combat(channel_id)
+    await interaction.response.send_message("⚔️ Combat has ended.")
+
+
+# =============================================================================
+# SETTINGS COMMANDS
+# =============================================================================
+
+@bot.tree.command(name="voice", description="Toggle voice narration on/off")
+@app_commands.describe(enabled="Enable or disable voice")
+async def voice_toggle(interaction: discord.Interaction, enabled: bool):
+    """Toggle TTS for this channel."""
+    channel_id = str(interaction.channel.id)
+    state = load_state(channel_id)
+    state["tts_enabled"] = enabled
+    save_state(channel_id, state)
+    
+    status = "🔊 **enabled**" if enabled else "🔇 **disabled**"
+    await interaction.response.send_message(f"Voice narration is now {status}")
+
+
+@bot.tree.command(name="leave", description="Disconnect bot from voice")
+async def leave_voice(interaction: discord.Interaction):
+    """Disconnect from voice channel."""
+    if interaction.guild:
+        await voice_manager.disconnect(interaction.guild.id)
+        await interaction.response.send_message("👋 Left voice channel.")
+    else:
+        await interaction.response.send_message("Not in a server.", ephemeral=True)
+
+
+# =============================================================================
+# UTILITY COMMANDS  
+# =============================================================================
+
+@bot.tree.command(name="help", description="Show available commands")
+async def help_cmd(interaction: discord.Interaction):
+    """Display help information."""
+    help_text = """
+# 🎲 AI Dungeon Master
+
+**Getting Started:**
+1. `/character <name>` - Create your character
+2. `/stats` - Set your ability scores
+3. Join a voice channel
+4. `/campaign` - Start an adventure!
+
+**During Play:**
+• `/do <action>` - Describe what you do
+• `/say <speech>` - Speak in character
+• `/roll <dice>` - Roll dice (1d20, 2d6+3, athletics)
+• `/done` - End your turn
+
+**Campaign:**
+• `/status` - View party and campaign info
+• `/recap` - Get a summary of recent events
+
+**Combat:**
+• `/fight <enemies>` - Start combat (e.g., goblin:15:13)
+• `/attack <target> <bonus> <damage>` - Attack!
+• `/endcombat` - End combat
+
+**Settings:**
+• `/voice <on/off>` - Toggle voice narration
+• `/leave` - Disconnect bot from voice
+"""
+    await interaction.response.send_message(help_text)
+
+
+@bot.tree.command(name="exportlog", description="Export session log")
+async def export_log(interaction: discord.Interaction):
+    """Export the session log as a file."""
+    session_id = str(interaction.channel.id)
+    log_path = get_log_file(session_id)
+    
+    if not log_path or not os.path.exists(log_path):
+        await interaction.response.send_message("No log found for this session.", ephemeral=True)
+        return
+    
+    await interaction.response.send_message(file=discord.File(log_path))
+
+
+# =============================================================================
+# BOT EVENTS
+# =============================================================================
+
+@bot.event
+async def on_ready():
+    print(f'🎲 {bot.user} has connected to Discord!')
+    
+    await asyncio.sleep(2)
+    
+    try:
+        synced = await bot.tree.sync()
+        print(f'✅ Synced {len(synced)} commands')
+        for cmd in synced:
+            print(f'  • /{cmd.name}')
     except Exception as e:
-        await interaction.followup.send(f"❌ Failed to check commands: {e}", ephemeral=True)
+        print(f'❌ Sync failed: {e}')
+
 
 if __name__ == '__main__':
     bot.run(DISCORD_TOKEN)
