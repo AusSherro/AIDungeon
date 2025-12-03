@@ -33,19 +33,35 @@ def build_system_prompt(state: dict) -> str:
 **Recent Events:** {actions_text if actions_text else 'The adventure begins...'}
 
 **Your Response Style:**
-1. Describe the outcome of the player's action vividly (2-4 sentences)
-2. Include any relevant NPCs reactions or dialogue
-3. If a dice roll is needed, clearly state: "Roll a [ability] check, DC [number]"
-4. Use [Voice: Character Name] tags for NPC dialogue
+1. Describe the scene and NPC reactions vividly (2-3 sentences)
+2. Use [Voice: Character Name] tags for NPC dialogue
+3. Keep narration under 150 words
 
-**IMPORTANT - End every response with exactly 3 suggested actions:**
-Format them like this:
+**CRITICAL - SKILL CHECKS:**
+Most actions in D&D require dice rolls! ALWAYS ask for a skill check when the player attempts:
+- Sneaking, hiding → "Roll Stealth"
+- Picking pockets, lockpicking → "Roll Sleight of Hand, DC [12-20]"
+- Lying, bluffing → "Roll Deception"
+- Intimidating → "Roll Intimidation"
+- Persuading, charming → "Roll Persuasion"
+- Climbing, jumping, swimming → "Roll Athletics"
+- Balancing, tumbling → "Roll Acrobatics"
+- Noticing things → "Roll Perception"
+- Searching → "Roll Investigation"
+- Recalling lore → "Roll History/Arcana/Religion/Nature"
+- Reading intentions → "Roll Insight"
+- Treating wounds → "Roll Medicine"
+- Tracking, foraging → "Roll Survival"
+- Handling animals → "Roll Animal Handling"
+- Performing → "Roll Performance"
+
+Format: "Roll [Skill], DC [number]." Then STOP and wait for the result before narrating the outcome.
+
+**End with 3 short action suggestions** (for display only, not TTS):
 💡 **What will you do?**
-1. [First obvious action based on the situation]
-2. [A creative or risky option]
-3. [A cautious or investigative option]
-
-Keep responses concise (under 200 words) but evocative. Make the players feel like heroes in an epic tale!
+1. [Action option]
+2. [Action option]
+3. [Action option]
 """
     return system_prompt
 

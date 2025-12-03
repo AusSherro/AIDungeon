@@ -19,7 +19,7 @@ from config import Config
 
 from services.openai_service import get_dm_response, generate_campaign, summarize_history
 from services.elevenlabs_service import text_to_speech_async
-from utils.voice_parser import extract_voice_tag, clean_text
+from utils.voice_parser import extract_voice_tag, clean_text, clean_for_tts
 from utils.voice_map import get_voice_id
 from utils.voice_manager import VoiceClientManager
 from utils.state_manager import (
@@ -83,8 +83,13 @@ async def play_tts(interaction, text: str, voice_tag: str = "Narrator"):
         return
     
     try:
+        # Clean text for TTS - remove suggestions and formatting
+        tts_text = clean_for_tts(text)
+        if not tts_text:
+            return
+            
         voice_id = get_voice_id(voice_tag)
-        audio_bytes = await text_to_speech_async(text, voice_id)
+        audio_bytes = await text_to_speech_async(tts_text, voice_id)
         if audio_bytes:
             await voice_manager.play(interaction.user.voice.channel, audio_bytes)
     except Exception as e:
