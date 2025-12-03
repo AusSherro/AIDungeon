@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from config import Config
 
 from services.openai_service import get_dm_response, generate_campaign, summarize_history
-from services.elevenlabs_service import text_to_speech
+from services.elevenlabs_service import text_to_speech, text_to_speech_async
 from utils.voice_parser import extract_voice_tag, clean_text
 from utils.voice_map import get_voice_id
 from utils.voice_manager import VoiceClientManager
@@ -375,12 +375,12 @@ async def new_campaign(interaction: discord.Interaction, prompt: str = ""):
     
     # Detect all users in the initiator's voice channel (ignore bots)
     if not (interaction.user.voice and interaction.user.voice.channel):
-        await interaction.followup.send("You must be in a voice channel to start a campaign.")
+        await interaction.followup.send("⚠️ You must be in a voice channel to start a campaign.")
         return
     
     members = [m for m in interaction.user.voice.channel.members if not m.bot]
     if not members:
-        await interaction.followup.send("No players in your voice channel.")
+        await interaction.followup.send("⚠️ No players in your voice channel.")
         return
     
     random.shuffle(members)
@@ -388,6 +388,7 @@ async def new_campaign(interaction: discord.Interaction, prompt: str = ""):
     set_turn_order(state, turn_order)
     set_current_turn_index(state, 0)
     state["players"] = turn_order
+    state["tts_enabled"] = state.get("tts_enabled", True)  # Enable TTS by default
     
     # Generate campaign intro and state details
     campaign_text, state = generate_campaign(state, prompt if prompt else None)
@@ -395,25 +396,32 @@ async def new_campaign(interaction: discord.Interaction, prompt: str = ""):
     # Save campaign and turn order
     save_state(channel_id, state)
     
+    # Build player list
+    player_list = "\n".join([f"• <@{pid}>" for pid in turn_order])
+    
     # Announce campaign and first player
-    tts_text = clean_text(campaign_text)
-    voice_id = get_voice_id("Narrator")
-    
-    try:
-        audio_bytes = text_to_speech(tts_text, voice_id)
-    except Exception as e:
-        print(f"TTS Error: {e}")
-        audio_bytes = None
-    
     first_player_id = turn_order[0]
     first_player_mention = f"<@{first_player_id}>"
-    await interaction.followup.send(
-        f"{campaign_text}\n\n{first_player_mention}, it's your turn. What do you do?"
+    
+    output = (
+        f"{campaign_text}\n\n"
+        f"**🎭 Players ({len(turn_order)}):**\n{player_list}\n\n"
+        f"➡️ {first_player_mention}, you're up first! Use `/act <action>` to begin."
     )
     
-    # Play audio if possible
-    if audio_bytes and interaction.user.voice and interaction.user.voice.channel:
-        await play_audio_in_voice(interaction.user.voice.channel, audio_bytes)
+    await interaction.followup.send(output)
+    log_message(channel_id, "DM", f"New campaign started with {len(turn_order)} players")
+    
+    # Play audio if TTS enabled
+    if state.get("tts_enabled", True) and interaction.user.voice and interaction.user.voice.channel:
+        tts_text = clean_text(campaign_text)
+        voice_id = get_voice_id("Narrator")
+        try:
+            audio_bytes = await text_to_speech_async(tts_text, voice_id)
+            if audio_bytes:
+                await play_audio_in_voice(interaction.user.voice.channel, audio_bytes)
+        except Exception as e:
+            print(f"TTS Error: {e}")
 
 
 @bot.tree.command(name="whereami", description="Show your current campaign location")
@@ -476,6 +484,28 @@ async def set_auto_advance(interaction: discord.Interaction, enabled: bool):
     save_state(channel_id, state)
     await interaction.response.send_message(f"Auto-advance set to {enabled}")
 
+
+@bot.tree.command(name="tts", description="Toggle text-to-speech for this channel")
+async def tts_toggle(interaction: discord.Interaction, enabled: bool):
+    """Toggle TTS on/off for the current channel to save ElevenLabs credits."""
+    channel_id = str(interaction.channel.id)
+    state = load_state(channel_id)
+    state["tts_enabled"] = enabled
+    save_state(channel_id, state)
+    
+    status = "🔊 enabled" if enabled else "🔇 disabled"
+    await interaction.response.send_message(f"Voice narration is now {status} for this channel.")
+
+
+@bot.tree.command(name="leave_voice", description="Disconnect the bot from voice channel")
+async def leave_voice(interaction: discord.Interaction):
+    """Manually disconnect the bot from voice to save resources."""
+    if interaction.guild:
+        await voice_manager.disconnect(interaction.guild.id)
+        await interaction.response.send_message("👋 Left the voice channel.")
+    else:
+        await interaction.response.send_message("Not in a guild.", ephemeral=True)
+
 @bot.tree.command(name="act", description="Take your turn in the campaign.")
 async def act(interaction: discord.Interaction, action: str):
     channel_id = str(interaction.channel.id)
@@ -509,32 +539,40 @@ async def act(interaction: discord.Interaction, action: str):
     voice_tag = extract_voice_tag(narration)
     text = clean_text(narration)
 
-    # Format output in the required style
-    output = (
-        "Narrator: " + text + "\n\n"
-    )
-    next_player = turn_order[(current_index + 1) % len(turn_order)] if turn_order else current_player_id
-    output += f"<@{current_player_id}>, it's still your turn. What do you do next?\n\n"
-    output += f"🎲 Next up: <@{next_player}>"
+    # Check if TTS is enabled for this channel
+    tts_enabled = state.get("tts_enabled", True)
 
-    await interaction.followup.send(output)
+    # Format output - cleaner with action suggestions
+    output = f"🎭 **{interaction.user.display_name}:** {action}\n\n"
+    output += f"📜 **Narrator:**\n{text}\n"
+    
+    # Add loot notifications if any
     for item in loot_items:
         add_inventory(current_player_id, item)
+        output += f"\n🎒 *You obtained: {item}*"
 
+    await interaction.followup.send(output)
+    
+    # Play voice narration if TTS enabled and in voice channel
+    if tts_enabled and interaction.user.voice and interaction.user.voice.channel:
+        try:
+            audio_bytes = await text_to_speech_async(text, get_voice_id(voice_tag))
+            if audio_bytes:
+                await play_audio_in_voice(interaction.user.voice.channel, audio_bytes)
+        except Exception as e:
+            print(f"TTS Error: {e}")
+
+    # Handle auto-advance or prompt for end_turn
     if state.get("auto_advance"):
         idx = get_current_turn_index(updated_state)
         next_idx = (idx + 1) % len(turn_order)
         set_current_turn_index(updated_state, next_idx)
         next_player_id = turn_order[next_idx]
         next_player_mention = f"<@{next_player_id}>"
-        await interaction.followup.send(f"{next_player_mention}, it's your turn.")
-        voice_id = get_voice_id("Narrator")
-        try:
-            audio_bytes = text_to_speech(f"It's your turn, {next_player_mention}", voice_id)
-            if interaction.user.voice and interaction.user.voice.channel:
-                await play_audio_in_voice(interaction.user.voice.channel, audio_bytes)
-        except Exception as e:
-            print(f"TTS Error: {e}")
+        await interaction.followup.send(f"➡️ {next_player_mention}, it's your turn. What do you do?")
+    else:
+        # Remind player they can end turn or continue
+        await interaction.followup.send(f"💡 *Use `/end_turn` to pass to the next player, or `/act` again to continue your turn.*")
 
     save_state(channel_id, updated_state)
     log_message(channel_id, interaction.user.display_name, action)
@@ -562,21 +600,26 @@ async def end_turn(interaction: discord.Interaction):
     save_state(channel_id, state)
     next_player_id = turn_order[next_idx]
     next_player_mention = f"<@{next_player_id}>"
-    msg = f"{next_player_mention}, it's your turn. What do you do?"
+    
+    # Get next player's character name if registered
+    from utils.character_manager import load_character
+    next_char = load_character(next_player_id)
+    char_name = next_char.get('name', 'adventurer') if next_char else 'adventurer'
+    
+    msg = f"➡️ {next_player_mention}, it's your turn! What does **{char_name}** do?"
     
     await interaction.response.send_message(msg)
     log_message(channel_id, "DM", f"Turn passed to {next_player_mention}")
     
-    # Play voice line if possible
-    voice_id = get_voice_id("Narrator")
-    try:
-        audio_bytes = text_to_speech(f"It's your turn, {next_player_mention}", voice_id)
-    except Exception as e:
-        print(f"TTS Error: {e}")
-        audio_bytes = None
-    
-    if audio_bytes and interaction.user.voice and interaction.user.voice.channel:
-        await play_audio_in_voice(interaction.user.voice.channel, audio_bytes)
+    # Play voice line if TTS enabled
+    if state.get("tts_enabled", True) and interaction.user.voice and interaction.user.voice.channel:
+        voice_id = get_voice_id("Narrator")
+        try:
+            audio_bytes = await text_to_speech_async(f"It's your turn, {char_name}. What do you do?", voice_id)
+            if audio_bytes:
+                await play_audio_in_voice(interaction.user.voice.channel, audio_bytes)
+        except Exception as e:
+            print(f"TTS Error: {e}")
 
 @bot.tree.command(name="start_adventure", description="Generate a new campaign setup with an optional prompt")
 async def start_adventure(interaction: discord.Interaction, prompt: str = ""):
@@ -588,22 +631,19 @@ async def start_adventure(interaction: discord.Interaction, prompt: str = ""):
     campaign_text, state = generate_campaign(state, prompt if prompt else None)
     save_state(channel_id, state)
     
-    # Clean and prepare text for TTS
-    tts_text = clean_text(campaign_text)
-    voice_id = get_voice_id("Narrator")
-    
-    try:
-        audio_bytes = text_to_speech(tts_text, voice_id)
-    except Exception as e:
-        print(f"TTS Error: {e}")
-        audio_bytes = None
-    
     await interaction.followup.send(campaign_text)
-    log_message(channel_id, "DM", f"New adventure started: {campaign_text}")
+    log_message(channel_id, "DM", f"New adventure started: {state.get('campaign_title', 'Untitled')}")
     
-    # Play audio if possible
-    if audio_bytes and interaction.user.voice and interaction.user.voice.channel:
-        await play_audio_in_voice(interaction.user.voice.channel, audio_bytes)
+    # Play audio if TTS enabled and in voice channel
+    if state.get("tts_enabled", True) and interaction.user.voice and interaction.user.voice.channel:
+        tts_text = clean_text(campaign_text)
+        voice_id = get_voice_id("Narrator")
+        try:
+            audio_bytes = await text_to_speech_async(tts_text, voice_id)
+            if audio_bytes:
+                await play_audio_in_voice(interaction.user.voice.channel, audio_bytes)
+        except Exception as e:
+            print(f"TTS Error: {e}")
 
 @bot.tree.command(name="check_commands", description="Check current command registration status (admin only)")
 async def check_commands(interaction: discord.Interaction):

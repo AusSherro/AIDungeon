@@ -1,6 +1,6 @@
 # AI Dungeon Master
 
-A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS, designed for Discord with persistent campaign state.
+A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (with free Edge TTS fallback), designed for Discord with persistent campaign state.
 
 ---
 
@@ -29,6 +29,30 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS, de
    ```powershell
    python discord_bot.py
    ```
+
+---
+
+## 🔊 Voice Options (TTS)
+
+The bot supports multiple TTS providers to fit your needs:
+
+| Provider | Cost | Quality | Setup |
+|----------|------|---------|-------|
+| **ElevenLabs** | Paid (10k chars/mo free) | ⭐⭐⭐⭐⭐ Excellent | Set `ELEVENLABS_API_KEY` in `.env` |
+| **Edge TTS** | Free | ⭐⭐⭐⭐ Good | Auto-fallback, no setup needed |
+| **Disabled** | N/A | N/A | Set `TTS_PROVIDER=disabled` |
+
+**Configuration in `.env`:**
+```bash
+TTS_PROVIDER=elevenlabs  # Options: elevenlabs, edge, disabled
+```
+
+**Per-channel toggle:** Use `/tts false` to disable voice for a channel (saves credits!)
+
+**ElevenLabs Credit Usage:**
+- ~1000 characters per AI response ≈ 10 responses per 10k credits
+- For testing, use `TTS_PROVIDER=edge` (free Microsoft voices)
+- The bot automatically falls back to Edge TTS if ElevenLabs fails
 ---
 
 ## 🧪 Example Usage

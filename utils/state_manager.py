@@ -22,6 +22,7 @@ DEFAULT_STATE = {
     "turn_order": [],
     "current_turn_index": 0,
     "auto_advance": False,
+    "tts_enabled": True,
 }
 
 def _get_state_path(session_id):
