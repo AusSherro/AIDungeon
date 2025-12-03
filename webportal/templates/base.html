@@ -341,6 +341,193 @@
             color: var(--text-secondary);
             margin-bottom: 10px;
         }
+        
+        /* Spell Slots */
+        .spell-slots-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        
+        .spell-slot-level {
+            background: var(--bg-input);
+            padding: 12px 15px;
+            border-radius: 8px;
+            text-align: center;
+            min-width: 100px;
+        }
+        
+        .spell-slot-label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-bottom: 5px;
+        }
+        
+        .spell-slot-circles {
+            display: flex;
+            justify-content: center;
+            gap: 3px;
+            margin-bottom: 5px;
+        }
+        
+        .spell-slot-circle {
+            font-size: 1rem;
+        }
+        
+        .spell-slot-circle.filled {
+            color: var(--accent-gold);
+        }
+        
+        .spell-slot-circle.empty {
+            color: var(--border-color);
+        }
+        
+        .spell-slot-count {
+            font-size: 0.9rem;
+            color: var(--text-primary);
+        }
+        
+        /* Spell List */
+        .spell-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        
+        .spell-tag {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+        }
+        
+        .spell-tag.cantrip {
+            border-color: var(--accent-green);
+            color: var(--accent-green);
+        }
+        
+        .spell-tag.known {
+            border-color: var(--accent-blue);
+            color: var(--accent-blue);
+        }
+        
+        .spell-tag.prepared {
+            background: var(--accent-gold);
+            color: var(--bg-dark);
+            border-color: var(--accent-gold);
+            font-weight: bold;
+        }
+        
+        /* Features List */
+        .features-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .feature-item {
+            background: var(--bg-input);
+            padding: 10px 15px;
+            border-radius: 6px;
+            border-left: 3px solid var(--accent-gold);
+        }
+        
+        /* Spell Management Page */
+        .spell-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: var(--bg-input);
+            border-radius: 8px;
+            margin-bottom: 8px;
+        }
+        
+        .spell-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 12px;
+            margin-top: 10px;
+        }
+        
+        .spell-card {
+            background: var(--bg-input);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .spell-card .spell-name {
+            font-weight: bold;
+            color: var(--text-primary);
+        }
+        
+        .spell-card .spell-school {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+        
+        .spell-card .spell-info {
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+        
+        .spell-badge {
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        
+        .spell-badge.ritual {
+            background: var(--accent-purple);
+            color: white;
+        }
+        
+        .spell-badge.concentration {
+            background: var(--accent-blue);
+            color: white;
+        }
+        
+        .spell-level-group {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            margin-bottom: 10px;
+            padding: 10px 15px;
+        }
+        
+        .spell-level-group summary {
+            cursor: pointer;
+            font-weight: bold;
+            color: var(--accent-gold);
+            padding: 5px 0;
+        }
+        
+        .btn-sm {
+            padding: 4px 10px;
+            font-size: 0.8rem;
+        }
+        
+        .btn-success {
+            background: var(--accent-green);
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #27ae60;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 8px;
+        }
     </style>
     {% block extra_css %}{% endblock %}
 </head>

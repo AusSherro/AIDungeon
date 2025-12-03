@@ -11,6 +11,7 @@
                 {{ state.realm or 'Unknown Realm' }} • {{ state.location or 'Unknown Location' }}
             </p>
         </div>
+        <button type="button" class="btn btn-danger" onclick="confirmDelete()">🗑️ Delete Campaign</button>
     </div>
     
     {% if state.plot_hook %}
@@ -106,4 +107,17 @@
 
 <br>
 <a href="{{ url_for('portal.dm_dashboard') }}" class="btn btn-secondary">← Back to Dashboard</a>
+
+<!-- Hidden delete form -->
+<form id="deleteForm" method="POST" action="{{ url_for('portal.delete_campaign', session_id=session_id) }}" style="display: none;"></form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function confirmDelete() {
+    if (confirm('Are you sure you want to delete this campaign? This cannot be undone!')) {
+        document.getElementById('deleteForm').submit();
+    }
+}
+</script>
 {% endblock %}

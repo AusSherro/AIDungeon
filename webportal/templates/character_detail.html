@@ -13,7 +13,13 @@
                 <span class="tag tag-level">Level {{ char.level or 1 }}</span>
             </p>
         </div>
-        <a href="{{ url_for('portal.edit_character', char_id=char_id) }}" class="btn btn-primary">✏️ Edit</a>
+        <div class="button-group">
+            <form method="POST" action="{{ url_for('portal.sync_character', char_id=char_id) }}" style="display:inline;">
+                <button type="submit" class="btn btn-success" title="Sync spell slots and features with class/level">🔄 Sync</button>
+            </form>
+            <a href="{{ url_for('portal.edit_character', char_id=char_id) }}" class="btn btn-primary">✏️ Edit</a>
+            <button type="button" class="btn btn-danger" onclick="confirmDelete()">🗑️ Delete</button>
+        </div>
     </div>
     
     <!-- HP Bar -->
@@ -87,6 +93,98 @@
     {% endif %}
 </div>
 
+<!-- Spellcasting -->
+{% set total_slots = (char.spell_slots.get('1', 0)|int + char.spell_slots.get('2', 0)|int + char.spell_slots.get('3', 0)|int + char.spell_slots.get('4', 0)|int + char.spell_slots.get('5', 0)|int) if char.spell_slots else 0 %}
+{% set has_spells = total_slots > 0 %}
+{% set has_cantrips = char.cantrips_known and char.cantrips_known|length > 0 %}
+{% set has_known_spells = char.spells_known and char.spells_known|length > 0 %}
+{% set has_prepared_spells = char.prepared_spells and char.prepared_spells|length > 0 %}
+{% set has_features = char.features and char.features|length > 0 %}
+
+{% if has_spells or has_cantrips or has_known_spells or has_prepared_spells %}
+<div class="card">
+    <div class="card-header">
+        <h2>✨ Spellcasting</h2>
+        <a href="{{ url_for('portal.manage_spells', char_id=char_id) }}" class="btn btn-primary">📖 Manage Spells</a>
+    </div>
+    
+    <!-- Spell Slots -->
+    {% if has_spells %}
+    <div class="form-group">
+        <label>Spell Slots</label>
+        <div class="spell-slots-grid">
+            {% for level in range(1, 10) %}
+            {% set total = char.spell_slots.get(level|string, 0) %}
+            {% set used = char.spell_slots_used.get(level|string, 0) if char.spell_slots_used else 0 %}
+            {% set remaining = total - used %}
+            {% if total > 0 %}
+            <div class="spell-slot-level">
+                <div class="spell-slot-label">Level {{ level }}</div>
+                <div class="spell-slot-circles">
+                    {% for i in range(total) %}
+                    <span class="spell-slot-circle {% if i < remaining %}filled{% else %}empty{% endif %}">●</span>
+                    {% endfor %}
+                </div>
+                <div class="spell-slot-count">{{ remaining }}/{{ total }}</div>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Cantrips -->
+    {% if has_cantrips %}
+    <div class="form-group">
+        <label>Cantrips</label>
+        <div class="spell-list">
+            {% for cantrip in char.cantrips_known %}
+            <span class="spell-tag cantrip">{{ cantrip }}</span>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Known Spells -->
+    {% if has_known_spells %}
+    <div class="form-group">
+        <label>Known Spells</label>
+        <div class="spell-list">
+            {% for spell in char.spells_known %}
+            <span class="spell-tag known">{{ spell }}</span>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Prepared Spells -->
+    {% if has_prepared_spells %}
+    <div class="form-group">
+        <label>Prepared Spells</label>
+        <div class="spell-list">
+            {% for spell in char.prepared_spells %}
+            <span class="spell-tag prepared">{{ spell }}</span>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- Features -->
+{% if char.features and char.features|length > 0 %}
+<div class="card">
+    <div class="card-header">
+        <h2>📜 Features & Traits</h2>
+    </div>
+    <div class="features-list">
+        {% for feature in char.features %}
+        <div class="feature-item">{{ feature }}</div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
 <!-- Experience -->
 {% if char.xp is defined %}
 <div class="card">
@@ -101,4 +199,17 @@
 
 <br>
 <a href="{{ url_for('portal.list_characters') }}" class="btn btn-secondary">← Back to Characters</a>
+
+<!-- Hidden delete form -->
+<form id="deleteForm" method="POST" action="{{ url_for('portal.delete_character', char_id=char_id) }}" style="display: none;"></form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function confirmDelete() {
+    if (confirm('Are you sure you want to delete {{ char.name }}? This cannot be undone!')) {
+        document.getElementById('deleteForm').submit();
+    }
+}
+</script>
 {% endblock %}

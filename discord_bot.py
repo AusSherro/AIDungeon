@@ -56,6 +56,17 @@ from utils.character_manager import (
     SKILLS,
     calculate_skill_bonus,
     get_ability_modifier,
+    learn_spell,
+    forget_spell,
+    learn_cantrip,
+    prepare_spell,
+    unprepare_spell,
+    cast_spell,
+    get_available_spells,
+    get_spell_slots_remaining,
+    level_up,
+    get_available_classes,
+    get_available_races,
 )
 from utils.combat_manager import (
     start_combat, roll_initiative, next_turn, 
@@ -1054,6 +1065,228 @@ async def inventory_cmd(
 
 
 # =============================================================================
+# SPELL COMMANDS
+# =============================================================================
+
+@bot.tree.command(name="spells", description="View your known and prepared spells")
+async def spells_cmd(interaction: discord.Interaction):
+    """Display your character's spells and spell slots."""
+    user_id = str(interaction.user.id)
+    char = load_character(user_id)
+    
+    if not char:
+        await interaction.response.send_message("Create a character first!", ephemeral=True)
+        return
+    
+    char_name = char.get('name', 'Character')
+    spells = get_available_spells(user_id)
+    slots = get_spell_slots_remaining(user_id)
+    
+    output = f"# ✨ {char_name}'s Spellbook\n\n"
+    
+    # Show cantrips
+    cantrips = spells.get('cantrips', [])
+    if cantrips:
+        output += f"**Cantrips:** {', '.join(cantrips)}\n\n"
+    
+    # Show spell slots
+    if slots:
+        slot_display = []
+        for level, info in sorted(slots.items(), key=lambda x: int(x[0])):
+            remaining = info['remaining']
+            total = info['total']
+            # Use filled/empty circles to show slots
+            filled = '●' * remaining
+            empty = '○' * (total - remaining)
+            slot_display.append(f"**Level {level}:** {filled}{empty} ({remaining}/{total})")
+        output += "**Spell Slots:**\n" + "\n".join(slot_display) + "\n\n"
+    
+    # Show prepared spells
+    prepared = spells.get('prepared', [])
+    if prepared:
+        output += f"**Prepared Spells:** {', '.join(prepared)}\n\n"
+    elif not cantrips and not slots:
+        output += "*No spellcasting ability*\n"
+    
+    # Show known spells (for classes that learn spells like Bard, Sorcerer)
+    known = spells.get('known', [])
+    if known:
+        # Group by level if we have spell data
+        output += f"**Known Spells:** {', '.join(known)}\n"
+    
+    await interaction.response.send_message(output)
+
+
+@bot.tree.command(name="cast", description="Cast a spell")
+@app_commands.describe(
+    spell="Name of the spell to cast",
+    slot_level="Spell slot level to use (for upcasting)"
+)
+async def cast_cmd(
+    interaction: discord.Interaction,
+    spell: str,
+    slot_level: Optional[int] = None
+):
+    """Cast a spell, consuming a spell slot."""
+    user_id = str(interaction.user.id)
+    channel_id = str(interaction.channel.id)
+    char = load_character(user_id)
+    
+    if not char:
+        await interaction.response.send_message("Create a character first!", ephemeral=True)
+        return
+    
+    char_name = char.get('name', 'Character')
+    
+    success, message, spell_data = cast_spell(user_id, spell, slot_level)
+    
+    if not success:
+        await interaction.response.send_message(f"❌ {message}", ephemeral=True)
+        return
+    
+    # Build casting message
+    output = f"✨ **{char_name}** casts **{spell}**!"
+    
+    if spell_data:
+        desc = spell_data.get('description', '')
+        if desc:
+            output += f"\n*{desc}*"
+        if spell_data.get('concentration'):
+            output += "\n⚡ *Concentration required*"
+    
+    # Show remaining slots
+    slots = get_spell_slots_remaining(user_id)
+    if slots and slot_level:
+        slot_key = str(slot_level)
+        if slot_key in slots:
+            remaining = slots[slot_key]['remaining']
+            total = slots[slot_key]['total']
+            output += f"\n(Level {slot_level} slots: {remaining}/{total})"
+    
+    await interaction.response.send_message(output)
+    log_message(channel_id, char_name, f"Cast {spell}")
+
+
+@bot.tree.command(name="prepare", description="Prepare or unprepare a spell")
+@app_commands.describe(
+    spell="Name of the spell",
+    remove="Remove spell from prepared list instead of adding"
+)
+async def prepare_cmd(
+    interaction: discord.Interaction,
+    spell: str,
+    remove: bool = False
+):
+    """Prepare or unprepare a spell for casting."""
+    user_id = str(interaction.user.id)
+    char = load_character(user_id)
+    
+    if not char:
+        await interaction.response.send_message("Create a character first!", ephemeral=True)
+        return
+    
+    char_name = char.get('name', 'Character')
+    
+    if remove:
+        result, message = unprepare_spell(user_id, spell)
+        if result:
+            await interaction.response.send_message(f"📖 **{char_name}** unprepared **{spell}**")
+        else:
+            await interaction.response.send_message(f"❌ {message}", ephemeral=True)
+    else:
+        result, message = prepare_spell(user_id, spell)
+        if result:
+            await interaction.response.send_message(f"📖 **{char_name}** prepared **{spell}**!")
+        else:
+            await interaction.response.send_message(f"❌ {message}", ephemeral=True)
+
+
+@bot.tree.command(name="learn", description="Learn a new spell or cantrip")
+@app_commands.describe(
+    spell="Name of the spell to learn",
+    cantrip="Set to True if learning a cantrip"
+)
+async def learn_cmd(
+    interaction: discord.Interaction,
+    spell: str,
+    cantrip: bool = False
+):
+    """Learn a new spell or cantrip."""
+    user_id = str(interaction.user.id)
+    char = load_character(user_id)
+    
+    if not char:
+        await interaction.response.send_message("Create a character first!", ephemeral=True)
+        return
+    
+    char_name = char.get('name', 'Character')
+    
+    if cantrip:
+        result, message = learn_cantrip(user_id, spell)
+    else:
+        result, message = learn_spell(user_id, spell)
+    
+    if result:
+        spell_type = "cantrip" if cantrip else "spell"
+        await interaction.response.send_message(f"📚 **{char_name}** learned the {spell_type} **{spell}**!")
+    else:
+        await interaction.response.send_message(f"❌ {message}", ephemeral=True)
+
+
+@bot.tree.command(name="levelup", description="Level up your character")
+@app_commands.describe(
+    average_hp="Use average HP instead of rolling"
+)
+async def levelup_cmd(
+    interaction: discord.Interaction,
+    average_hp: bool = False
+):
+    """Level up your character, gaining HP and new features."""
+    user_id = str(interaction.user.id)
+    char = load_character(user_id)
+    
+    if not char:
+        await interaction.response.send_message("Create a character first!", ephemeral=True)
+        return
+    
+    char_name = char.get('name', 'Character')
+    old_level = char.get('level', 1)
+    
+    result = level_up(user_id, roll_hp=not average_hp)
+    
+    if not result:
+        await interaction.response.send_message("❌ Could not level up", ephemeral=True)
+        return
+    
+    new_level = result['data']['level']
+    hp_gained = result['hp_gained']
+    new_features = result['new_features']
+    
+    output = (
+        f"🎉 **{char_name}** leveled up!\n"
+        f"───────────────────────\n"
+        f"**Level:** {old_level} → {new_level}\n"
+        f"**HP:** +{hp_gained} (now {result['data']['hp']}/{result['data']['max_hp']})\n"
+        f"**Proficiency Bonus:** +{result['data']['proficiency']}\n"
+    )
+    
+    if new_features:
+        output += f"\n**New Features:**\n" + "\n".join(f"• {f}" for f in new_features)
+    
+    # Check for new spell slots
+    char = load_character(user_id)
+    slots = get_spell_slots_remaining(user_id)
+    if slots:
+        slot_info = []
+        for level, info in sorted(slots.items(), key=lambda x: int(x[0])):
+            slot_info.append(f"Level {level}: {info['total']}")
+        if slot_info:
+            output += f"\n\n**Spell Slots:** {', '.join(slot_info)}"
+    
+    await interaction.response.send_message(output)
+
+
+# =============================================================================
 # SETTINGS COMMANDS
 # =============================================================================
 
@@ -1127,6 +1360,13 @@ async def help_cmd(interaction: discord.Interaction):
 • `/hp damage:5` or `/hp heal:10` - Manage HP
 • `/inventory` - View/add/remove items
 • `/rest` - Short or long rest
+• `/levelup` - Level up your character
+
+**Spells & Magic:**
+• `/spells` - View your spells and spell slots
+• `/learn spell:Fireball` - Learn a new spell
+• `/prepare spell:Shield` - Prepare a spell for casting
+• `/cast spell:Magic Missile` - Cast a spell
 
 **Combat:**
 • `/fight goblin:15:13 orc:25:14` - Start combat (name:hp:ac)

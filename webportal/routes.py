@@ -1,11 +1,25 @@
 """Routes for the simple web portal."""
 
-from flask import Blueprint, render_template, abort, request, redirect, url_for, flash
+from flask import Blueprint, render_template, abort, request, redirect, url_for, flash, jsonify
 import os
 import uuid
-from utils.character_manager import load_character, save_character, register_character
+from utils.character_manager import (
+    load_character, save_character, register_character, 
+    learn_spell, learn_cantrip, forget_spell, prepare_spell, unprepare_spell,
+    get_class_features
+)
 from utils.state_manager import load_state, get_context_summary
 from config import Config
+
+# Try to import D&D 5e data
+try:
+    from utils.dnd5e_data import (
+        get_class_data, get_spell_slots, get_features_at_level, get_all_features_up_to_level,
+        get_spells_for_class, get_cantrips_for_class, SPELLS, CLASSES
+    )
+    DND_DATA_AVAILABLE = True
+except ImportError:
+    DND_DATA_AVAILABLE = False
 
 def list_all_characters():
     """Return a list of all stored characters with full details."""
@@ -170,3 +184,183 @@ def dm_dashboard():
                 'player_count': len(state.get('players', [])),
             })
     return render_template('dm_dashboard.html', sessions=sessions)
+
+
+# ============ DELETE ROUTES ============
+
+@portal_bp.route('/character/<char_id>/delete', methods=['POST'])
+def delete_character(char_id: str):
+    """Delete a character."""
+    char_path = os.path.join(Config.CHARACTERS_DIR, f'{char_id}.json')
+    if os.path.exists(char_path):
+        os.remove(char_path)
+        flash('Character deleted successfully.', 'success')
+    else:
+        flash('Character not found.', 'error')
+    return redirect(url_for('portal.list_characters'))
+
+
+@portal_bp.route('/campaign/<session_id>/delete', methods=['POST'])
+def delete_campaign(session_id: str):
+    """Delete a campaign/session."""
+    state_path = os.path.join(Config.STATE_DIR, f'{session_id}.json')
+    if os.path.exists(state_path):
+        os.remove(state_path)
+        flash('Campaign deleted successfully.', 'success')
+    else:
+        flash('Campaign not found.', 'error')
+    return redirect(url_for('portal.dm_dashboard'))
+
+
+# ============ SPELL & LEVEL SYNC ROUTES ============
+
+@portal_bp.route('/character/<char_id>/sync', methods=['POST'])
+def sync_character(char_id: str):
+    """Sync character's spell slots and features with their class and level."""
+    char = load_character(char_id)
+    if not char:
+        abort(404)
+    
+    if not DND_DATA_AVAILABLE:
+        flash('D&D 5e data not available for sync.', 'error')
+        return redirect(url_for('portal.character_detail', char_id=char_id))
+    
+    class_name = char.get('class', 'Fighter')
+    level = char.get('level', 1)
+    
+    # Get class data
+    class_data = get_class_data(class_name)
+    if not class_data:
+        flash(f'Class {class_name} not found in D&D data.', 'error')
+        return redirect(url_for('portal.character_detail', char_id=char_id))
+    
+    # Update spell slots
+    if class_data.get('spellcasting'):
+        slots = get_spell_slots(class_name, level)
+        for slot_level in range(1, 10):
+            char['spell_slots'][str(slot_level)] = slots.get(slot_level, 0)
+    
+    # Update features
+    all_features = get_all_features_up_to_level(class_name, level)
+    for feature in all_features:
+        if feature not in char.get('features', []):
+            char.setdefault('features', []).append(feature)
+    
+    # Update proficiency bonus
+    char['proficiency'] = 2 + (level - 1) // 4
+    
+    # Update hit dice
+    hit_die = class_data.get('hit_die', 8)
+    char['hit_dice'] = f"{level}d{hit_die}"
+    
+    save_character(char_id, char)
+    flash(f'Synced {char["name"]} with {class_name} level {level} data!', 'success')
+    return redirect(url_for('portal.character_detail', char_id=char_id))
+
+
+@portal_bp.route('/character/<char_id>/spells', methods=['GET'])
+def manage_spells(char_id: str):
+    """Show spell management page."""
+    char = load_character(char_id)
+    if not char:
+        abort(404)
+    
+    available_spells = []
+    available_cantrips = []
+    
+    if DND_DATA_AVAILABLE:
+        class_name = char.get('class', 'Fighter')
+        
+        # Get spells for this class
+        for spell_name, spell_data in SPELLS.items():
+            if class_name in spell_data.get('classes', []):
+                spell_info = {
+                    'name': spell_name,
+                    'level': spell_data.get('level', 0),
+                    'school': spell_data.get('school', ''),
+                    'ritual': spell_data.get('ritual', False),
+                    'concentration': spell_data.get('concentration', False),
+                    'known': spell_name in char.get('spells_known', []),
+                    'prepared': spell_name in char.get('prepared_spells', []),
+                    'is_cantrip': spell_data.get('level', 0) == 0,
+                    'cantrip_known': spell_name in char.get('cantrips_known', [])
+                }
+                if spell_data.get('level', 0) == 0:
+                    available_cantrips.append(spell_info)
+                else:
+                    available_spells.append(spell_info)
+        
+        # Sort by level then name
+        available_spells.sort(key=lambda x: (x['level'], x['name']))
+        available_cantrips.sort(key=lambda x: x['name'])
+    
+    return render_template('spell_management.html', 
+                          char=char, 
+                          char_id=char_id,
+                          available_spells=available_spells,
+                          available_cantrips=available_cantrips)
+
+
+@portal_bp.route('/character/<char_id>/spells/learn', methods=['POST'])
+def learn_spell_route(char_id: str):
+    """Learn a spell or cantrip."""
+    spell_name = request.form.get('spell_name', '')
+    is_cantrip = request.form.get('is_cantrip') == 'true'
+    
+    if is_cantrip:
+        result, message = learn_cantrip(char_id, spell_name)
+    else:
+        result, message = learn_spell(char_id, spell_name)
+    
+    if result:
+        flash(message, 'success')
+    else:
+        flash(message, 'error')
+    
+    return redirect(url_for('portal.manage_spells', char_id=char_id))
+
+
+@portal_bp.route('/character/<char_id>/spells/forget', methods=['POST'])
+def forget_spell_route(char_id: str):
+    """Forget a spell."""
+    spell_name = request.form.get('spell_name', '')
+    is_cantrip = request.form.get('is_cantrip') == 'true'
+    
+    char = load_character(char_id)
+    if not char:
+        abort(404)
+    
+    if is_cantrip:
+        if spell_name in char.get('cantrips_known', []):
+            char['cantrips_known'].remove(spell_name)
+            save_character(char_id, char)
+            flash(f'Forgot cantrip: {spell_name}', 'success')
+        else:
+            flash(f"Doesn't know cantrip: {spell_name}", 'error')
+    else:
+        result, message = forget_spell(char_id, spell_name)
+        if result:
+            flash(message, 'success')
+        else:
+            flash(message, 'error')
+    
+    return redirect(url_for('portal.manage_spells', char_id=char_id))
+
+
+@portal_bp.route('/character/<char_id>/spells/prepare', methods=['POST'])
+def prepare_spell_route(char_id: str):
+    """Prepare or unprepare a spell."""
+    spell_name = request.form.get('spell_name', '')
+    action = request.form.get('action', 'prepare')
+    
+    if action == 'prepare':
+        result, message = prepare_spell(char_id, spell_name)
+    else:
+        result, message = unprepare_spell(char_id, spell_name)
+    
+    if result:
+        flash(message, 'success')
+    else:
+        flash(message, 'error')
+    
+    return redirect(url_for('portal.manage_spells', char_id=char_id))

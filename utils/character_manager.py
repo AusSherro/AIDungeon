@@ -2,6 +2,19 @@ import os
 import json
 from threading import Lock
 
+# Import D&D 5e data
+try:
+    from .dnd5e_data import (
+        CLASSES, SPELLS, RACES, 
+        get_class_data, get_spell_slots, get_features_at_level, get_all_features_up_to_level,
+        get_spells_for_class, get_spell, get_cantrips_for_class,
+        get_race_data, get_level_for_xp, get_proficiency_bonus as dnd_proficiency,
+        XP_THRESHOLDS
+    )
+    DND_DATA_AVAILABLE = True
+except ImportError:
+    DND_DATA_AVAILABLE = False
+
 CHAR_DIR = os.path.join(os.path.dirname(__file__), '..', 'characters')
 os.makedirs(CHAR_DIR, exist_ok=True)
 _char_locks = {}
@@ -68,7 +81,11 @@ DEFAULT_STATS = {
     'conditions': [],  # poisoned, stunned, etc.
     'death_saves': {'successes': 0, 'failures': 0},
     'inspiration': False,
-    'features': []  # class/race features
+    'features': [],  # class/race features
+    'cantrips_known': [],  # known cantrips
+    'prepared_spells': [],  # currently prepared spells
+    'subrace': '',  # e.g., "Hill Dwarf"
+    'subclass': '',  # e.g., "Champion" Fighter
 }
 
 def _get_char_path(user_id):
@@ -129,25 +146,57 @@ def save_character(user_id, data):
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
-def register_character(user_id, name, class_name='Fighter', race='Human'):
+def register_character(user_id, name, class_name='Fighter', race='Human', subrace=None):
     data = dict(DEFAULT_STATS)
     data['name'] = name
     data['class'] = class_name
     data['race'] = race
+    if subrace:
+        data['subrace'] = subrace
     
-    # Set initial HP based on class
-    if class_name.lower() in ['barbarian']:
-        data['hit_dice'] = '1d12'
-        data['hp'] = data['max_hp'] = 12 + get_ability_modifier(data['CON'])
-    elif class_name.lower() in ['fighter', 'paladin', 'ranger']:
-        data['hit_dice'] = '1d10'
-        data['hp'] = data['max_hp'] = 10 + get_ability_modifier(data['CON'])
-    elif class_name.lower() in ['wizard', 'sorcerer']:
-        data['hit_dice'] = '1d6'
-        data['hp'] = data['max_hp'] = 6 + get_ability_modifier(data['CON'])
-    else:  # Default d8 classes
-        data['hit_dice'] = '1d8'
-        data['hp'] = data['max_hp'] = 8 + get_ability_modifier(data['CON'])
+    # Use D&D 5e data if available
+    if DND_DATA_AVAILABLE:
+        class_data = get_class_data(class_name)
+        race_data = get_race_data(race, subrace)
+        
+        if class_data:
+            # Set hit dice and initial HP
+            hit_die = class_data.get('hit_die', 8)
+            data['hit_dice'] = f"1d{hit_die}"
+            data['hp'] = data['max_hp'] = hit_die + get_ability_modifier(data['CON'])
+            
+            # Set initial spell slots if spellcaster
+            if class_data.get('spellcasting'):
+                slots = get_spell_slots(class_name, 1)
+                for level, num in slots.items():
+                    data['spell_slots'][str(level)] = num
+            
+            # Set initial features
+            data['features'] = get_features_at_level(class_name, 1)
+        
+        if race_data:
+            # Apply racial speed
+            data['speed'] = race_data.get('speed', 30)
+            
+            # Add racial traits to features
+            data['features'].extend(race_data.get('traits', []))
+            
+            # Note: Ability score bonuses should be applied during character creation
+            # via a separate function to allow for point-buy or rolled stats
+    else:
+        # Fallback: Set initial HP based on class
+        if class_name.lower() in ['barbarian']:
+            data['hit_dice'] = '1d12'
+            data['hp'] = data['max_hp'] = 12 + get_ability_modifier(data['CON'])
+        elif class_name.lower() in ['fighter', 'paladin', 'ranger']:
+            data['hit_dice'] = '1d10'
+            data['hp'] = data['max_hp'] = 10 + get_ability_modifier(data['CON'])
+        elif class_name.lower() in ['wizard', 'sorcerer']:
+            data['hit_dice'] = '1d6'
+            data['hp'] = data['max_hp'] = 6 + get_ability_modifier(data['CON'])
+        else:  # Default d8 classes
+            data['hit_dice'] = '1d8'
+            data['hp'] = data['max_hp'] = 8 + get_ability_modifier(data['CON'])
     
     save_character(user_id, data)
     return data
@@ -382,23 +431,76 @@ def death_save(user_id, success):
     save_character(user_id, data)
     return data
 
-def level_up(user_id):
+def level_up(user_id, roll_hp=True):
+    """Level up a character, gaining HP and new features.
+    
+    Args:
+        user_id: The user's ID
+        roll_hp: If True, roll for HP. If False, take average.
+    
+    Returns:
+        dict with 'data' (updated character), 'hp_gained', and 'new_features'
+    """
     data = load_character(user_id)
     if not data:
         return None
     
-    data['level'] += 1
-    data['proficiency'] = get_proficiency_bonus(data['level'])
+    old_level = data['level']
+    new_level = old_level + 1
+    data['level'] = new_level
+    data['proficiency'] = get_proficiency_bonus(new_level)
     
-    # Increase max HP (roll hit die + CON modifier)
+    # Calculate HP increase
     import random
     dice_type = int(data.get('hit_dice', '1d8').split('d')[1])
-    hp_increase = random.randint(1, dice_type) + get_ability_modifier(data['CON'])
+    
+    if roll_hp:
+        hp_increase = random.randint(1, dice_type) + get_ability_modifier(data['CON'])
+    else:
+        # Take average (rounded up)
+        hp_increase = (dice_type // 2) + 1 + get_ability_modifier(data['CON'])
+    
+    hp_increase = max(1, hp_increase)  # Minimum 1 HP per level
     data['max_hp'] += hp_increase
     data['hp'] += hp_increase
     
+    # Update hit dice count
+    data['hit_dice'] = f"{new_level}d{dice_type}"
+    
+    new_features = []
+    
+    # Get new class features from D&D 5e data
+    if DND_DATA_AVAILABLE:
+        class_name = data.get('class', 'Fighter')
+        class_data = get_class_data(class_name)
+        
+        if class_data:
+            # Add new features for this level
+            new_features = get_features_at_level(class_name, new_level)
+            for feature in new_features:
+                if feature not in data.get('features', []):
+                    data.setdefault('features', []).append(feature)
+            
+            # Update spell slots if spellcaster
+            if class_data.get('spellcasting'):
+                slots = get_spell_slots(class_name, new_level)
+                for level, num in slots.items():
+                    data['spell_slots'][str(level)] = num
+                
+                # Check for new cantrips
+                casting = class_data['spellcasting']
+                cantrips = casting.get('cantrips', {})
+                for lvl in sorted(cantrips.keys()):
+                    if lvl == new_level:
+                        # Character gains additional cantrip slots at this level
+                        pass  # They choose which cantrips to learn
+    
     save_character(user_id, data)
-    return data
+    return {
+        'data': data,
+        'hp_gained': hp_increase,
+        'new_features': new_features
+    }
 
 def set_spell_slots(user_id, slots):
     data = load_character(user_id)
@@ -459,3 +561,290 @@ def get_character_summary(user_id):
         summary += f"\n**Conditions:** {', '.join(data['conditions'])}"
     
     return summary
+
+
+# =============================================================================
+# SPELL MANAGEMENT FUNCTIONS
+# =============================================================================
+
+def learn_spell(user_id, spell_name):
+    """Add a spell to the character's known spells."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    if DND_DATA_AVAILABLE:
+        spell = get_spell(spell_name)
+        if not spell:
+            return None, f"Spell '{spell_name}' not found"
+        
+        # Check if class can learn this spell
+        char_class = data.get('class', '')
+        if char_class not in spell.get('classes', []):
+            return None, f"{char_class}s cannot learn {spell_name}"
+    
+    if spell_name not in data.get('spells_known', []):
+        data.setdefault('spells_known', []).append(spell_name)
+        save_character(user_id, data)
+        return data, f"Learned {spell_name}!"
+    
+    return data, f"Already knows {spell_name}"
+
+
+def forget_spell(user_id, spell_name):
+    """Remove a spell from the character's known spells."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    if spell_name in data.get('spells_known', []):
+        data['spells_known'].remove(spell_name)
+        # Also remove from prepared if it was prepared
+        if spell_name in data.get('prepared_spells', []):
+            data['prepared_spells'].remove(spell_name)
+        save_character(user_id, data)
+        return data, f"Forgot {spell_name}"
+    
+    return None, f"Doesn't know {spell_name}"
+
+
+def learn_cantrip(user_id, cantrip_name):
+    """Add a cantrip to the character's known cantrips."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    if DND_DATA_AVAILABLE:
+        spell = get_spell(cantrip_name)
+        if not spell:
+            return None, f"Cantrip '{cantrip_name}' not found"
+        if spell.get('level', 1) != 0:
+            return None, f"'{cantrip_name}' is not a cantrip"
+        
+        char_class = data.get('class', '')
+        if char_class not in spell.get('classes', []):
+            return None, f"{char_class}s cannot learn {cantrip_name}"
+    
+    if cantrip_name not in data.get('cantrips_known', []):
+        data.setdefault('cantrips_known', []).append(cantrip_name)
+        save_character(user_id, data)
+        return data, f"Learned cantrip: {cantrip_name}!"
+    
+    return data, f"Already knows {cantrip_name}"
+
+
+def prepare_spell(user_id, spell_name):
+    """Prepare a known spell for casting."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    # Check if spell is known (for known casters) or available (for prepared casters)
+    if DND_DATA_AVAILABLE:
+        class_data = get_class_data(data.get('class', 'Fighter'))
+        if class_data and class_data.get('spellcasting'):
+            casting_type = class_data['spellcasting'].get('type', 'known')
+            
+            if casting_type == 'known':
+                # Must know the spell first
+                if spell_name not in data.get('spells_known', []):
+                    return None, f"Must learn {spell_name} before preparing it"
+            # For prepared casters (Cleric, Druid, Wizard, Paladin), 
+            # they can prepare from their full class list
+    
+    if spell_name in data.get('prepared_spells', []):
+        return data, f"{spell_name} is already prepared"
+    
+    data.setdefault('prepared_spells', []).append(spell_name)
+    save_character(user_id, data)
+    return data, f"Prepared {spell_name}"
+
+
+def unprepare_spell(user_id, spell_name):
+    """Remove a spell from prepared spells."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    if spell_name in data.get('prepared_spells', []):
+        data['prepared_spells'].remove(spell_name)
+        save_character(user_id, data)
+        return data, f"Unprepared {spell_name}"
+    
+    return None, f"{spell_name} was not prepared"
+
+
+def cast_spell(user_id, spell_name, slot_level=None):
+    """Cast a spell, consuming a spell slot.
+    
+    Args:
+        user_id: The user's ID
+        spell_name: Name of the spell to cast
+        slot_level: Level of spell slot to use (None = auto-select minimum)
+    
+    Returns:
+        tuple of (success: bool, message: str, spell_data: dict or None)
+    """
+    data = load_character(user_id)
+    if not data:
+        return False, "Character not found", None
+    
+    spell = None
+    spell_level = 0
+    
+    if DND_DATA_AVAILABLE:
+        spell = get_spell(spell_name)
+        if not spell:
+            return False, f"Spell '{spell_name}' not found", None
+        spell_level = spell.get('level', 0)
+    else:
+        # Without data, assume level 1 spell
+        spell_level = 1
+    
+    # Cantrips don't use spell slots
+    if spell_level == 0:
+        if spell_name not in data.get('cantrips_known', []):
+            return False, f"You don't know the cantrip {spell_name}", None
+        return True, f"Cast {spell_name}!", spell
+    
+    # Check if spell is prepared (or known for known casters)
+    is_prepared = spell_name in data.get('prepared_spells', [])
+    is_known = spell_name in data.get('spells_known', [])
+    
+    if not is_prepared and not is_known:
+        return False, f"You haven't prepared {spell_name}", None
+    
+    # Determine slot level to use
+    if slot_level is None:
+        slot_level = spell_level
+    
+    if slot_level < spell_level:
+        return False, f"{spell_name} requires at least a level {spell_level} slot", None
+    
+    # Check for available spell slot
+    slot_key = str(slot_level)
+    available = data['spell_slots'].get(slot_key, 0) - data['spell_slots_used'].get(slot_key, 0)
+    
+    if available <= 0:
+        return False, f"No level {slot_level} spell slots remaining", None
+    
+    # Use the slot
+    data['spell_slots_used'][slot_key] = data['spell_slots_used'].get(slot_key, 0) + 1
+    save_character(user_id, data)
+    
+    upcast_msg = f" at level {slot_level}" if slot_level > spell_level else ""
+    return True, f"Cast {spell_name}{upcast_msg}!", spell
+
+
+def get_available_spells(user_id):
+    """Get all spells available to a character (known + class list for prepared casters)."""
+    data = load_character(user_id)
+    if not data:
+        return None
+    
+    result = {
+        'cantrips': data.get('cantrips_known', []),
+        'known': data.get('spells_known', []),
+        'prepared': data.get('prepared_spells', []),
+        'spell_slots': data.get('spell_slots', {}),
+        'spell_slots_used': data.get('spell_slots_used', {}),
+    }
+    
+    # For prepared casters, show full class spell list
+    if DND_DATA_AVAILABLE:
+        class_name = data.get('class', '')
+        class_data = get_class_data(class_name)
+        
+        if class_data and class_data.get('spellcasting'):
+            casting_type = class_data['spellcasting'].get('type', 'known')
+            
+            if casting_type == 'prepared':
+                # Get max spell level they can cast
+                max_spell_level = 0
+                for slot_lvl, count in result['spell_slots'].items():
+                    if count > 0:
+                        max_spell_level = max(max_spell_level, int(slot_lvl))
+                
+                # Get all class spells up to that level
+                result['class_spell_list'] = get_spells_for_class(class_name, max_spell_level)
+    
+    return result
+
+
+def get_spell_slots_remaining(user_id):
+    """Get remaining spell slots for a character."""
+    data = load_character(user_id)
+    if not data:
+        return None
+    
+    remaining = {}
+    for level in range(1, 10):
+        level_str = str(level)
+        total = data['spell_slots'].get(level_str, 0)
+        used = data['spell_slots_used'].get(level_str, 0)
+        if total > 0:
+            remaining[level_str] = {'total': total, 'used': used, 'remaining': total - used}
+    
+    return remaining
+
+
+def apply_racial_bonuses(user_id, race_name, subrace=None):
+    """Apply racial ability score bonuses to a character."""
+    data = load_character(user_id)
+    if not data:
+        return None, "Character not found"
+    
+    if not DND_DATA_AVAILABLE:
+        return None, "D&D 5e data not available"
+    
+    race_data = get_race_data(race_name, subrace)
+    if not race_data:
+        return None, f"Race '{race_name}' not found"
+    
+    # Apply ability bonuses
+    for stat, bonus in race_data.get('ability_bonuses', {}).items():
+        data[stat] = data.get(stat, 10) + bonus
+    
+    # Update race/subrace
+    data['race'] = race_name
+    if subrace:
+        data['subrace'] = subrace
+    
+    # Apply speed
+    data['speed'] = race_data.get('speed', 30)
+    
+    # Add racial traits as features
+    for trait in race_data.get('traits', []):
+        if trait not in data.get('features', []):
+            data.setdefault('features', []).append(trait)
+    
+    # Recalculate HP with new CON
+    dice_type = int(data.get('hit_dice', '1d8').split('d')[1])
+    data['max_hp'] = dice_type + get_ability_modifier(data['CON'])
+    data['hp'] = data['max_hp']
+    
+    save_character(user_id, data)
+    return data, f"Applied {race_name}" + (f" ({subrace})" if subrace else "") + " bonuses"
+
+
+def get_class_features(class_name, level):
+    """Get all features a class has at a given level."""
+    if not DND_DATA_AVAILABLE:
+        return []
+    return get_all_features_up_to_level(class_name, level)
+
+
+def get_available_classes():
+    """Get list of available classes."""
+    if DND_DATA_AVAILABLE:
+        return list(CLASSES.keys())
+    return ['Fighter', 'Wizard', 'Rogue', 'Cleric', 'Ranger', 'Barbarian', 
+            'Bard', 'Druid', 'Monk', 'Paladin', 'Sorcerer', 'Warlock']
+
+
+def get_available_races():
+    """Get list of available races."""
+    if DND_DATA_AVAILABLE:
+        return list(RACES.keys())
+    return ['Human', 'Elf', 'Dwarf', 'Halfling', 'Half-Elf', 'Half-Orc', 
+            'Gnome', 'Dragonborn', 'Tiefling']
