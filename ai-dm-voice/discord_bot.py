@@ -84,6 +84,26 @@ from utils.map_manager import (
     TacticalMap, Token, load_map, save_map, delete_map,
     create_from_template, TERRAIN_TYPES, TOKEN_SYMBOLS, MAP_TEMPLATES
 )
+from utils.xp_manager import (
+    award_xp, award_party_xp, calculate_combat_xp, get_xp_summary,
+    get_xp_to_next_level, format_xp_bar, milestone_level_up
+)
+from utils.loot_manager import (
+    generate_treasure_hoard, generate_enemy_loot, roll_magic_item,
+    format_loot_display, format_currency, Rarity
+)
+from utils.ambient_manager import (
+    ambient_manager, AmbientMood, SoundEffect,
+    auto_set_mood, play_action_sfx
+)
+from utils.reaction_manager import (
+    has_reaction_available, use_reaction, reset_reactions,
+    reset_all_reactions_new_round,
+    check_opportunity_attack, resolve_opportunity_attack,
+    cast_shield, cast_counterspell, use_uncanny_dodge,
+    get_available_reactions, format_reaction_prompt, ReactionType
+)
+from utils.voice_map import get_voice_for_npc, extract_npc_from_tag
 
 load_dotenv()
 Config.validate()
@@ -100,6 +120,12 @@ voice_manager = VoiceClientManager()
 
 async def play_tts(interaction, text: str, voice_tag: str = "Narrator"):
     """Play TTS if enabled and user is in voice channel."""
+    from services.elevenlabs_service import TTS_PROVIDER
+    
+    # Quick exit if TTS is disabled
+    if TTS_PROVIDER == 'disabled':
+        return
+    
     channel_id = str(interaction.channel.id)
     state = load_state(channel_id)
     
@@ -114,13 +140,21 @@ async def play_tts(interaction, text: str, voice_tag: str = "Narrator"):
         tts_text = clean_for_tts(text)
         if not tts_text:
             return
-            
+        
+        # Check if this is an NPC voice (not a simple tag like "Narrator")
+        npc_name, npc_description = extract_npc_from_tag(voice_tag)
+        
+        if npc_description and voice_tag.lower() != 'narrator':
+            # Use NPC-specific voice based on description
+            voice_tag = get_voice_for_npc(npc_description, npc_name)
+        
         voice_id = get_voice_id(voice_tag)
         audio_bytes = await text_to_speech_async(tts_text, voice_id)
         if audio_bytes:
             await voice_manager.play(interaction.user.voice.channel, audio_bytes)
     except Exception as e:
-        print(f"TTS Error: {e}")
+        # Silently fail - don't let TTS errors break gameplay
+        print(f"TTS Error (non-blocking): {e}")
 
 
 # =============================================================================
@@ -242,6 +276,64 @@ async def do_action(interaction: discord.Interaction, action: str):
         skill_name = pending['skill'].replace('_', ' ').title()
         dc_text = f" (DC {pending['dc']})" if pending.get('dc') else ""
         output += f"\n\n🎲 **Roll {skill_name}{dc_text}!** Use `/roll {pending['skill']}`"
+
+    # Check if AI triggered combat automatically
+    pending_combat = updated_state.get('pending_combat')
+    combat_started = False
+    if pending_combat and pending_combat.get('trigger'):
+        # Check if combat isn't already active
+        existing_combat = load_combat(channel_id)
+        if not existing_combat or not existing_combat.get('active'):
+            enemies = pending_combat.get('enemies', [])
+            if enemies:
+                # Auto-start combat with detected enemies!
+                # Build player list from turn_order or just current player
+                player_list = []
+                for pid in updated_state.get('turn_order', [str(interaction.user.id)]):
+                    pchar = load_character(pid)
+                    if pchar:
+                        player_list.append({
+                            'id': pid,
+                            'name': pchar.get('name', f'Player_{pid}'),
+                            'hp': pchar.get('hp', {}).get('current', 10),
+                            'max_hp': pchar.get('hp', {}).get('max', 10),
+                            'ac': pchar.get('ac', 10)
+                        })
+                    else:
+                        player_list.append({'id': pid, 'name': f'Player_{pid}', 'hp': 10, 'max_hp': 10, 'ac': 10})
+                
+                # Build enemy list with auto-stats from dnd5e_data if available
+                from utils.dnd5e_data import MONSTERS
+                enemy_list = []
+                for enemy_name in enemies:
+                    base_name = enemy_name.rstrip('0123456789')  # Remove number suffix
+                    if base_name in MONSTERS:
+                        monster = MONSTERS[base_name]
+                        enemy_list.append({
+                            'name': enemy_name.capitalize(),
+                            'hp': monster.get('hp', 10),
+                            'max_hp': monster.get('hp', 10),
+                            'ac': monster.get('ac', 12)
+                        })
+                    else:
+                        # Default enemy stats
+                        enemy_list.append({'name': enemy_name.capitalize(), 'hp': 10, 'max_hp': 10, 'ac': 12})
+                
+                if player_list and enemy_list:
+                    combat_state = start_combat(channel_id, player_list, enemy_list)
+                    combat_started = True
+                    output += f"\n\n⚔️ **COMBAT INITIATED!**\n"
+                    output += "📋 **Initiative Order:**\n"
+                    for i, c in enumerate(combat_state.get('combatants', [])):
+                        marker = "➤ " if i == combat_state.get('current_turn', 0) else "  "
+                        output += f"{marker}{c['initiative']} - {c['name']} (HP: {c['hp']}/{c['max_hp']}, AC: {c['ac']})\n"
+                    output += f"\nUse `/attack <target>` to attack, `/nextturn` to pass."
+            else:
+                # Enemies detected but not identified - prompt DM
+                output += f"\n\n⚔️ **Combat seems imminent!** DM, use `/fight <enemies>` to start the encounter."
+        
+        # Clear the pending combat trigger
+        updated_state['pending_combat'] = None
 
     await interaction.followup.send(output)
     
@@ -756,6 +848,9 @@ async def fight_start(interaction: discord.Interaction, enemies: str):
     # Roll initiative
     init_state = roll_initiative(channel_id)
     
+    # Reset all reactions at combat start
+    reset_all_reactions_new_round(channel_id)
+    
     # Mark campaign as in combat
     state['in_combat'] = True
     state['free_form'] = False  # Combat uses strict turn order
@@ -858,6 +953,9 @@ async def next_turn_cmd(interaction: discord.Interaction):
     
     current = state['turn_order'][state['current_turn']]
     
+    # Reset reactions for the combatant whose turn just started
+    reset_reactions(channel_id, current['name'])
+    
     # Check if it's an enemy's turn
     if current.get('type') == 'enemy':
         await interaction.response.send_message(
@@ -874,8 +972,36 @@ async def next_turn_cmd(interaction: discord.Interaction):
 
 @bot.tree.command(name="endcombat", description="End the current combat")
 async def end_combat_cmd(interaction: discord.Interaction):
-    """End the combat encounter."""
+    """End the combat encounter and award XP."""
     channel_id = str(interaction.channel.id)
+    
+    # Get combat info before ending for XP calculation
+    combat = load_combat(channel_id)
+    xp_awarded = 0
+    loot_generated = None
+    level_ups = []
+    
+    if combat and combat.get('combatants'):
+        # Calculate XP from defeated enemies
+        defeated_enemies = [c for c in combat['combatants'] 
+                          if c.get('type') == 'enemy' and c.get('hp', 0) <= 0]
+        
+        if defeated_enemies:
+            xp_awarded = calculate_combat_xp(defeated_enemies)
+            
+            # Get players for XP distribution
+            state = load_state(channel_id)
+            players = state.get('players', [])
+            
+            if players and xp_awarded > 0:
+                results = award_party_xp(players, xp_awarded, equal_split=True)
+                level_ups = [r['character'] for r in results if r.get('level_up')]
+            
+            # Generate loot from the toughest enemy
+            if defeated_enemies:
+                best_enemy = max(defeated_enemies, key=lambda e: e.get('xp', 0))
+                cr = int(str(best_enemy.get('cr', '1')).replace('/', '.').split('.')[0]) if best_enemy.get('cr') else 1
+                loot_generated = generate_enemy_loot(best_enemy['name'], cr)
     
     # End the combat
     end_combat(channel_id)
@@ -886,10 +1012,22 @@ async def end_combat_cmd(interaction: discord.Interaction):
     state['free_form'] = True
     save_state(channel_id, state)
     
-    await interaction.response.send_message(
-        "⚔️ **Combat has ended.**\n"
-        "Back to free-form exploration. Anyone can `/do` actions."
-    )
+    # Build response message
+    lines = ["⚔️ **Combat has ended!**"]
+    
+    if xp_awarded > 0:
+        lines.append(f"✨ **XP Earned:** {xp_awarded} (split among party)")
+        if level_ups:
+            lines.append(f"🎉 **Level Up:** {', '.join(level_ups)}! Use `/levelup` to apply!")
+    
+    if loot_generated:
+        lines.append("")
+        lines.append(format_loot_display(loot_generated))
+    
+    lines.append("")
+    lines.append("Back to free-form exploration. Anyone can `/do` actions.")
+    
+    await interaction.response.send_message("\n".join(lines))
     await play_tts(interaction, "Combat has ended. What do you do now?", "Narrator")
 
 
@@ -2013,6 +2151,61 @@ async def leave_voice(interaction: discord.Interaction):
         await interaction.response.send_message("Not in a server.", ephemeral=True)
 
 
+@bot.tree.command(name="joinvoice", description="Join your voice channel for TTS narration")
+async def join_voice(interaction: discord.Interaction):
+    """Connect bot to user's voice channel."""
+    if not interaction.guild:
+        await interaction.response.send_message("Not in a server.", ephemeral=True)
+        return
+    
+    if not interaction.user.voice or not interaction.user.voice.channel:
+        await interaction.response.send_message("❌ You need to be in a voice channel first!", ephemeral=True)
+        return
+    
+    await interaction.response.defer()
+    
+    try:
+        channel = interaction.user.voice.channel
+        await voice_manager.get_or_create(channel)
+        
+        # Enable TTS for this channel
+        channel_id = str(interaction.channel.id)
+        state = load_state(channel_id)
+        state["tts_enabled"] = True
+        save_state(channel_id, state)
+        
+        await interaction.followup.send(f"🔊 Joined **{channel.name}**! Voice narration is now enabled.")
+    except Exception as e:
+        await interaction.followup.send(f"❌ Failed to join voice: {e}")
+
+
+@bot.tree.command(name="reconnect", description="Fix voice connection issues")
+async def reconnect_voice(interaction: discord.Interaction):
+    """Force reconnect to voice channel."""
+    if not interaction.guild:
+        await interaction.response.send_message("Not in a server.", ephemeral=True)
+        return
+    
+    if not interaction.user.voice or not interaction.user.voice.channel:
+        await interaction.response.send_message("❌ You need to be in a voice channel first!", ephemeral=True)
+        return
+    
+    await interaction.response.defer()
+    
+    try:
+        # Force disconnect first
+        await voice_manager.disconnect(interaction.guild.id)
+        await asyncio.sleep(1)  # Brief pause
+        
+        # Reconnect
+        channel = interaction.user.voice.channel
+        await voice_manager.get_or_create(channel)
+        
+        await interaction.followup.send(f"🔄 Reconnected to **{channel.name}**!")
+    except Exception as e:
+        await interaction.followup.send(f"❌ Reconnection failed: {e}")
+
+
 # =============================================================================
 # UTILITY COMMANDS  
 # =============================================================================
@@ -2042,6 +2235,12 @@ async def help_cmd(interaction: discord.Interaction):
 • `/inventory` - View/add/remove items
 • `/rest` - Short or long rest
 • `/levelup` - Level up your character
+• `/xp` - View or award XP
+
+**Party & XP:**
+• `/party` - View party dashboard with HP, AC, spells
+• `/xp` - View your XP progress
+• `/awardparty xp:500` - Award XP to all party members
 
 **Spells & Magic:**
 • `/spells` - View your spells and spell slots
@@ -2054,8 +2253,13 @@ async def help_cmd(interaction: discord.Interaction):
 • `/attack target:Goblin bonus:5 damage:1d8+3` - Attack!
 • `/combatinfo` - View turn order and HP
 • `/nextturn` - Advance to next combatant
+• `/reaction` - Use your reaction (Shield, Counterspell, etc.)
 • `/deathsave` - Roll death saving throw
-• `/endcombat` - End combat
+• `/endcombat` - End combat (auto-awards XP!)
+
+**Loot & Treasure:**
+• `/loot` - Generate random loot by CR
+• `/treasure cr:5` - Generate a treasure hoard
 
 **Tactical Maps:**
 • `/newmap` - Create a new battle map
@@ -2082,12 +2286,516 @@ async def help_cmd(interaction: discord.Interaction):
 • `/summarize` - Save events to long-term memory
 • `/remember` - Manually add notes/NPCs/quests
 
-**Settings:**
+**Ambient & Voice:**
 • `/voice` - Toggle TTS on/off
+• `/ambient` - Set ambient music mood
+• `/sfx` - Play sound effects
+• `/joinvoice` - Connect bot to voice
+
+**Settings:**
 • `/turns` - Toggle free-form vs strict turns
 • `/leave` - Disconnect from voice
 """
     await interaction.response.send_message(help_text)
+
+
+# =============================================================================
+# PARTY DASHBOARD
+# =============================================================================
+
+@bot.tree.command(name="party", description="View party status dashboard")
+async def party_dashboard(interaction: discord.Interaction):
+    """Display a comprehensive party status dashboard."""
+    channel_id = str(interaction.channel.id)
+    state = load_state(channel_id)
+    
+    if not state.get('campaign_title'):
+        await interaction.response.send_message("No active campaign. Use `/campaign` to start!", ephemeral=True)
+        return
+    
+    players = state.get('players', [])
+    if not players:
+        await interaction.response.send_message("No players in the party yet.", ephemeral=True)
+        return
+    
+    # Build party display
+    lines = [
+        f"# 🎭 Party Dashboard",
+        f"**Campaign:** {state.get('campaign_title', 'Untitled')}",
+        f"**Location:** {state.get('current_location', 'Unknown')}",
+        "───────────────────────",
+    ]
+    
+    total_hp = 0
+    total_max_hp = 0
+    
+    for pid in players:
+        char = load_character(pid)
+        if not char:
+            lines.append(f"<@{pid}> - *No character*")
+            continue
+        
+        name = char.get('name', 'Unknown')
+        level = char.get('level', 1)
+        char_class = char.get('class', 'Adventurer')
+        hp = char.get('hp', 0)
+        max_hp = char.get('max_hp', 10)
+        ac = char.get('ac', 10)
+        
+        total_hp += hp
+        total_max_hp += max_hp
+        
+        # HP bar
+        hp_pct = hp / max_hp if max_hp > 0 else 0
+        hp_bar_len = 10
+        hp_filled = int(hp_bar_len * hp_pct)
+        hp_bar = '█' * hp_filled + '░' * (hp_bar_len - hp_filled)
+        
+        # Status icons
+        status_icons = ""
+        conditions = char.get('conditions', [])
+        if hp <= 0:
+            status_icons += "💀 "
+        elif hp <= max_hp // 4:
+            status_icons += "⚠️ "
+        if 'poisoned' in conditions:
+            status_icons += "🤢 "
+        if 'stunned' in conditions or 'paralyzed' in conditions:
+            status_icons += "😵 "
+        if char.get('concentration'):
+            status_icons += "🔮 "
+        
+        # Spell slots
+        spell_slots = char.get('spell_slots', {})
+        spell_slots_used = char.get('spell_slots_used', {})
+        slots_info = ""
+        for lvl in ['1', '2', '3', '4', '5']:
+            total = spell_slots.get(lvl, 0)
+            used = spell_slots_used.get(lvl, 0)
+            if total > 0:
+                remaining = total - used
+                slots_info += f"L{lvl}:{remaining}/{total} "
+        
+        # XP progress
+        xp = char.get('xp', 0)
+        xp_bar = format_xp_bar(xp, level, 8)
+        
+        lines.append(f"**{name}** - Level {level} {char_class}")
+        lines.append(f"  ❤️ [{hp_bar}] {hp}/{max_hp} HP  |  🛡️ AC {ac}  {status_icons}")
+        if slots_info:
+            lines.append(f"  ✨ Slots: {slots_info.strip()}")
+        lines.append(f"  📊 XP: {xp_bar}")
+        if conditions:
+            lines.append(f"  ⚡ Conditions: {', '.join(conditions)}")
+        lines.append("")
+    
+    # Party summary
+    party_hp_pct = total_hp / total_max_hp if total_max_hp > 0 else 0
+    party_status = "💚 Healthy" if party_hp_pct > 0.5 else "💛 Injured" if party_hp_pct > 0.25 else "❤️ Critical"
+    
+    lines.append("───────────────────────")
+    lines.append(f"**Party Status:** {party_status} ({total_hp}/{total_max_hp} total HP)")
+    
+    # Combat status
+    combat = load_combat(channel_id)
+    if combat and combat.get('active'):
+        current = combat['turn_order'][combat['current_turn']]
+        lines.append(f"⚔️ **In Combat** - Round {combat.get('round', 1)} - {current['name']}'s turn")
+    
+    await interaction.response.send_message("\n".join(lines))
+
+
+# =============================================================================
+# XP & LEVELING COMMANDS
+# =============================================================================
+
+@bot.tree.command(name="xp", description="View or award XP")
+@app_commands.describe(
+    award="Amount of XP to award (leave empty to view)",
+    target="Target player (leave empty for self)"
+)
+async def xp_cmd(
+    interaction: discord.Interaction,
+    award: Optional[int] = None,
+    target: Optional[discord.Member] = None
+):
+    """View or award experience points."""
+    user_id = str(target.id if target else interaction.user.id)
+    
+    if award is not None and award > 0:
+        # Award XP
+        result = award_xp(user_id, award)
+        if result.get('error'):
+            await interaction.response.send_message(result['error'], ephemeral=True)
+            return
+        
+        msg = f"✨ **{result['character']}** gained **{award} XP**!\n"
+        msg += f"📊 Total XP: {result['new_xp']}\n"
+        msg += f"{format_xp_bar(result['new_xp'], result['new_level'])}\n"
+        
+        if result.get('level_up'):
+            msg += f"\n🎉 **LEVEL UP!** {result['old_level']} → {result['new_level']}!\n"
+            msg += f"Use `/levelup` to apply your new level benefits!"
+        else:
+            msg += f"XP to next level: {result['xp_to_next']}"
+        
+        await interaction.response.send_message(msg)
+    else:
+        # View XP
+        summary = get_xp_summary(user_id)
+        if summary.get('error'):
+            await interaction.response.send_message(summary['error'], ephemeral=True)
+            return
+        
+        msg = f"📊 **{summary['name']}** - Level {summary['level']}\n"
+        msg += f"XP: {summary['xp']}\n"
+        msg += f"{summary['progress_bar']}\n"
+        
+        if summary['at_max_level']:
+            msg += "🏆 Maximum level reached!"
+        else:
+            msg += f"XP to level {summary['level'] + 1}: {summary['xp_to_next']}"
+        
+        await interaction.response.send_message(msg)
+
+
+@bot.tree.command(name="awardparty", description="Award XP to all party members")
+@app_commands.describe(xp="Total XP to distribute", split="Split evenly among party?")
+async def award_party_cmd(interaction: discord.Interaction, xp: int, split: bool = True):
+    """Award XP to all party members."""
+    channel_id = str(interaction.channel.id)
+    state = load_state(channel_id)
+    
+    players = state.get('players', [])
+    if not players:
+        await interaction.response.send_message("No players in the party!", ephemeral=True)
+        return
+    
+    results = award_party_xp(players, xp, split)
+    
+    xp_each = xp // len(players) if split else xp
+    lines = [f"✨ **Party XP Award** - {xp} XP {'split among' if split else 'each for'} {len(players)} players"]
+    lines.append("───────────────────────")
+    
+    level_ups = []
+    for result in results:
+        if result.get('error'):
+            continue
+        line = f"• **{result['character']}**: +{xp_each} XP ({result['new_xp']} total)"
+        if result.get('level_up'):
+            line += f" 🎉 **LEVEL {result['new_level']}!**"
+            level_ups.append(result['character'])
+        lines.append(line)
+    
+    if level_ups:
+        lines.append("───────────────────────")
+        lines.append(f"🎊 Level ups: {', '.join(level_ups)}! Use `/levelup` to apply!")
+    
+    await interaction.response.send_message("\n".join(lines))
+
+
+# =============================================================================
+# LOOT COMMANDS
+# =============================================================================
+
+@bot.tree.command(name="loot", description="Generate random loot")
+@app_commands.describe(cr="Challenge Rating for loot scaling", loot_type="Type of loot to generate")
+@app_commands.choices(loot_type=[
+    app_commands.Choice(name="Treasure Hoard", value="hoard"),
+    app_commands.Choice(name="Enemy Drop", value="enemy"),
+    app_commands.Choice(name="Magic Item", value="magic"),
+])
+async def loot_cmd(
+    interaction: discord.Interaction, 
+    cr: int = 1,
+    loot_type: str = "enemy"
+):
+    """Generate random loot based on CR."""
+    if loot_type == "hoard":
+        loot = generate_treasure_hoard(cr)
+        msg = f"💰 **Treasure Hoard (CR {cr})**\n"
+        msg += format_loot_display(loot)
+    elif loot_type == "magic":
+        max_rarity = Rarity.UNCOMMON if cr < 5 else Rarity.RARE if cr < 11 else Rarity.VERY_RARE if cr < 17 else Rarity.LEGENDARY
+        item = roll_magic_item(max_rarity)
+        if item:
+            msg = f"✨ **Magic Item Found!**\n"
+            msg += f"{item['rarity_icon']} **{item['name']}** ({item['rarity'].replace('_', ' ').title()})\n"
+            msg += f"*{item['effect']}*"
+        else:
+            msg = "No magic item generated."
+    else:
+        loot = generate_enemy_loot("Defeated Enemy", cr)
+        msg = f"🗡️ **Enemy Loot (CR {cr})**\n"
+        msg += format_loot_display(loot)
+    
+    await interaction.response.send_message(msg)
+
+
+@bot.tree.command(name="treasure", description="Generate a treasure hoard")
+@app_commands.describe(cr="Challenge Rating of the encounter")
+async def treasure_cmd(interaction: discord.Interaction, cr: int = 5):
+    """Generate a full treasure hoard."""
+    loot = generate_treasure_hoard(cr, include_magic=True)
+    
+    lines = [f"💎 **Treasure Hoard** (CR {cr})"]
+    lines.append("═══════════════════════")
+    
+    # Currency
+    if loot.get('currency'):
+        lines.append(f"🪙 **Coins:** {format_currency(loot['currency'])}")
+    
+    # Gems
+    if loot.get('gems'):
+        lines.append(f"💎 **Gems:**")
+        for gem, value in loot['gems']:
+            lines.append(f"  • {gem} ({value} gp)")
+    
+    # Art
+    if loot.get('art_objects'):
+        lines.append(f"🖼️ **Art Objects:**")
+        for obj, value in loot['art_objects']:
+            lines.append(f"  • {obj} ({value} gp)")
+    
+    # Magic Items
+    if loot.get('magic_items'):
+        lines.append(f"✨ **Magic Items:**")
+        for item in loot['magic_items']:
+            lines.append(f"  {item['rarity_icon']} **{item['name']}**")
+            lines.append(f"    *{item['effect']}*")
+    
+    # Mundane
+    if loot.get('mundane'):
+        lines.append(f"📦 **Other Items:** {', '.join(loot['mundane'])}")
+    
+    await interaction.response.send_message("\n".join(lines))
+
+
+# =============================================================================
+# AMBIENT MUSIC COMMANDS
+# =============================================================================
+
+@bot.tree.command(name="ambient", description="Set ambient music mood")
+@app_commands.describe(mood="The ambient mood to set")
+@app_commands.choices(mood=[
+    app_commands.Choice(name="🎵 Combat - Epic battle music", value="combat"),
+    app_commands.Choice(name="🌲 Exploration - Adventure themes", value="exploration"),
+    app_commands.Choice(name="🍺 Tavern - Jovial inn music", value="tavern"),
+    app_commands.Choice(name="🏰 Dungeon - Dark, ominous", value="dungeon"),
+    app_commands.Choice(name="🌳 Forest - Nature sounds", value="forest"),
+    app_commands.Choice(name="🏘️ Town - Marketplace bustle", value="town"),
+    app_commands.Choice(name="✨ Mysterious - Magical ambiance", value="mysterious"),
+    app_commands.Choice(name="👹 Boss - Intense battle", value="boss"),
+    app_commands.Choice(name="🏆 Victory - Triumphant", value="victory"),
+    app_commands.Choice(name="😰 Tension - Suspenseful", value="tension"),
+    app_commands.Choice(name="🛏️ Rest - Calm, peaceful", value="rest"),
+])
+async def ambient_cmd(interaction: discord.Interaction, mood: str):
+    """Set the ambient music mood."""
+    if not interaction.guild:
+        await interaction.response.send_message("Must be in a server.", ephemeral=True)
+        return
+    
+    try:
+        ambient_mood = AmbientMood(mood)
+    except ValueError:
+        await interaction.response.send_message("Invalid mood.", ephemeral=True)
+        return
+    
+    # Get voice client if available
+    voice_client = interaction.guild.voice_client
+    
+    if voice_client:
+        await ambient_manager.set_mood(voice_client, ambient_mood)
+        await interaction.response.send_message(f"🎵 Ambient mood set to **{mood.title()}**")
+    else:
+        # Just update the state for when voice connects
+        state = ambient_manager.get_state(interaction.guild.id)
+        state['current_mood'] = ambient_mood
+        await interaction.response.send_message(f"🎵 Ambient mood queued: **{mood.title()}** (join voice to hear)")
+
+
+@bot.tree.command(name="sfx", description="Play a sound effect")
+@app_commands.describe(effect="Sound effect to play")
+@app_commands.choices(effect=[
+    app_commands.Choice(name="🎲 Dice Roll", value="dice_roll"),
+    app_commands.Choice(name="⚔️ Critical Hit", value="critical_hit"),
+    app_commands.Choice(name="💀 Critical Miss", value="critical_miss"),
+    app_commands.Choice(name="⬆️ Level Up", value="level_up"),
+    app_commands.Choice(name="💚 Healing", value="healing"),
+    app_commands.Choice(name="🪙 Gold Coins", value="gold_coins"),
+    app_commands.Choice(name="🚪 Door Open", value="door_open"),
+    app_commands.Choice(name="⚔️ Combat Start", value="combat_start"),
+    app_commands.Choice(name="🏆 Victory Fanfare", value="victory_fanfare"),
+])
+async def sfx_cmd(interaction: discord.Interaction, effect: str):
+    """Play a sound effect."""
+    if not interaction.guild:
+        await interaction.response.send_message("Must be in a server.", ephemeral=True)
+        return
+    
+    voice_client = interaction.guild.voice_client
+    if not voice_client:
+        await interaction.response.send_message("Bot must be in a voice channel. Use `/joinvoice`", ephemeral=True)
+        return
+    
+    try:
+        sfx = SoundEffect(effect)
+        await ambient_manager.play_sfx(voice_client, sfx)
+        await interaction.response.send_message(f"🔊 Playing: {effect.replace('_', ' ').title()}")
+    except Exception as e:
+        await interaction.response.send_message(f"Could not play sound effect: {e}", ephemeral=True)
+
+
+# =============================================================================
+# REACTION COMMANDS
+# =============================================================================
+
+@bot.tree.command(name="reaction", description="Use your reaction in combat")
+@app_commands.describe(
+    reaction_type="Type of reaction to use",
+    target="Target of the reaction (if applicable)"
+)
+@app_commands.choices(reaction_type=[
+    app_commands.Choice(name="⚔️ Opportunity Attack", value="opportunity_attack"),
+    app_commands.Choice(name="🛡️ Shield (+5 AC)", value="shield"),
+    app_commands.Choice(name="🚫 Counterspell", value="counterspell"),
+    app_commands.Choice(name="🌀 Absorb Elements", value="absorb_elements"),
+    app_commands.Choice(name="🔥 Hellish Rebuke", value="hellish_rebuke"),
+    app_commands.Choice(name="🎭 Cutting Words", value="cutting_words"),
+    app_commands.Choice(name="⚡ Uncanny Dodge", value="uncanny_dodge"),
+    app_commands.Choice(name="🏹 Deflect Missiles", value="deflect_missiles"),
+])
+async def reaction_cmd(
+    interaction: discord.Interaction,
+    reaction_type: str,
+    target: Optional[str] = None
+):
+    """Use your reaction in combat."""
+    channel_id = str(interaction.channel.id)
+    user_id = str(interaction.user.id)
+    
+    char = load_character(user_id)
+    if not char:
+        await interaction.response.send_message("Create a character first!", ephemeral=True)
+        return
+    
+    char_name = char.get('name', 'Character')
+    
+    # Check if in combat
+    combat = load_combat(channel_id)
+    if not combat or not combat.get('active'):
+        await interaction.response.send_message("No active combat!", ephemeral=True)
+        return
+    
+    # Check if reaction is available
+    if not has_reaction_available(channel_id, char_name):
+        await interaction.response.send_message("You've already used your reaction this round!", ephemeral=True)
+        return
+    
+    try:
+        rtype = ReactionType(reaction_type)
+    except ValueError:
+        await interaction.response.send_message("Invalid reaction type.", ephemeral=True)
+        return
+    
+    # Handle specific reactions
+    if rtype == ReactionType.SHIELD:
+        result = cast_shield(channel_id, char_name)
+        if result.get('error'):
+            await interaction.response.send_message(result['error'], ephemeral=True)
+            return
+        
+        await interaction.response.send_message(
+            f"🛡️ **{char_name}** casts **Shield**!\n"
+            f"AC increased by {result['ac_bonus']} (now {result['new_ac']}) until start of next turn."
+        )
+    
+    elif rtype == ReactionType.COUNTERSPELL:
+        if not target:
+            await interaction.response.send_message("Specify the spell level being countered!", ephemeral=True)
+            return
+        
+        try:
+            spell_level = int(target)
+        except ValueError:
+            spell_level = 3  # Default assumption
+        
+        result = cast_counterspell(channel_id, char_name, spell_level)
+        if result.get('error'):
+            await interaction.response.send_message(result['error'], ephemeral=True)
+            return
+        
+        msg = f"🚫 **{char_name}** casts **Counterspell**!\n"
+        if result['check_roll']:
+            msg += f"Ability check: {result['check_roll']} + 4 = {result['check_roll'] + 4}\n"
+        msg += result['message']
+        
+        await interaction.response.send_message(msg)
+    
+    elif rtype == ReactionType.UNCANNY_DODGE:
+        if not target:
+            await interaction.response.send_message("Specify the damage amount to halve!", ephemeral=True)
+            return
+        
+        try:
+            damage = int(target)
+        except ValueError:
+            await interaction.response.send_message("Enter a number for damage.", ephemeral=True)
+            return
+        
+        result = use_uncanny_dodge(channel_id, char_name, damage)
+        if result.get('error'):
+            await interaction.response.send_message(result['error'], ephemeral=True)
+            return
+        
+        await interaction.response.send_message(
+            f"⚡ **{char_name}** uses **Uncanny Dodge**!\n"
+            f"Damage reduced from {result['original_damage']} to {result['reduced_damage']} "
+            f"({result['damage_prevented']} prevented)"
+        )
+    
+    elif rtype == ReactionType.OPPORTUNITY_ATTACK:
+        if not target:
+            await interaction.response.send_message("Specify the target of your opportunity attack!", ephemeral=True)
+            return
+        
+        # Get attack bonus from character
+        attack_bonus = get_ability_modifier(char.get('STR', 10)) + char.get('proficiency', 2)
+        
+        # Get weapon damage (default 1d8+STR)
+        weapon = char.get('equipment', {}).get('weapon')
+        if weapon:
+            damage_dice = weapon.get('damage', '1d8') + f"+{get_ability_modifier(char.get('STR', 10))}"
+        else:
+            damage_dice = f"1d8+{get_ability_modifier(char.get('STR', 10))}"
+        
+        result = resolve_opportunity_attack(channel_id, char_name, target, attack_bonus, damage_dice)
+        if result.get('error'):
+            await interaction.response.send_message(result['error'], ephemeral=True)
+            return
+        
+        if result.get('fumble'):
+            msg = f"⚔️ **{char_name}** takes an opportunity attack on **{target}**... 💀 Critical Miss!"
+        elif result.get('crit'):
+            msg = f"⚔️ **{char_name}** 🌟 **CRITICAL** opportunity attack on **{target}** for **{result['damage']}** damage!"
+        elif result['hit']:
+            msg = f"⚔️ **{char_name}** opportunity attack hits **{target}** for **{result['damage']}** damage! ({result['target_hp']} HP remaining)"
+        else:
+            msg = f"⚔️ **{char_name}** opportunity attack on **{target}** misses! ({result['total']} vs AC {result['target_ac']})"
+        
+        await interaction.response.send_message(msg)
+    
+    else:
+        # Generic reaction use
+        result = use_reaction(channel_id, char_name, rtype)
+        if result.get('error'):
+            await interaction.response.send_message(result['error'], ephemeral=True)
+            return
+        
+        await interaction.response.send_message(
+            f"⚡ **{char_name}** uses **{reaction_type.replace('_', ' ').title()}**!"
+        )
 
 
 @bot.tree.command(name="exportlog", description="Export session log")

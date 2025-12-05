@@ -59,6 +59,14 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 | `/rest short/long` | Take a rest |
 | `/deathsave` | Roll death saving throw |
 | `/levelup` | Level up your character |
+| `/xp [amount]` | View or award XP |
+
+### Party & XP
+| Command | Description |
+|---------|-------------|
+| `/party` | View party dashboard (HP, AC, conditions, spell slots) |
+| `/xp` | View your XP progress and level |
+| `/awardparty xp:500` | Award XP to all party members |
 
 ### Spellcasting
 | Command | Description |
@@ -83,7 +91,14 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 | `/attack target:Goblin bonus:5 damage:1d8+3` | Attack a target |
 | `/combatinfo` | View turn order and HP |
 | `/nextturn` | Advance to next combatant |
-| `/endcombat` | End combat encounter |
+| `/reaction` | Use your reaction (Shield, Counterspell, etc.) |
+| `/endcombat` | End combat (auto-awards XP and generates loot!) |
+
+### Loot & Treasure
+| Command | Description |
+|---------|-------------|
+| `/loot [cr]` | Generate random loot by CR |
+| `/treasure cr:5` | Generate a full treasure hoard |
 
 ### Campaign Memory
 | Command | Description |
@@ -93,6 +108,12 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 | `/context` | See what the AI remembers |
 | `/summarize` | Save events to long-term memory |
 | `/remember note/npc/quest` | Manually add to memory |
+
+### Ambient & Sound
+| Command | Description |
+|---------|-------------|
+| `/ambient [mood]` | Set ambient music mood (combat, tavern, dungeon, etc.) |
+| `/sfx [effect]` | Play sound effect (sword, spell, explosion, etc.) |
 
 ### Settings
 | Command | Description |
@@ -127,6 +148,77 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 | `/dmhandouts` | [DM] View all campaign handouts |
 | `/revealhandout` | [DM] Reveal handout to all |
 | `/sharehandout` | [DM] Share with specific player |
+
+---
+
+## ⚔️ Reaction System
+
+Combat reactions are tracked and can be used strategically:
+
+| Reaction | Trigger | Effect |
+|----------|---------|--------|
+| **Opportunity Attack** | Enemy leaves your reach | Free melee attack |
+| **Shield** | When hit by attack | +5 AC until next turn |
+| **Counterspell** | Enemy casts a spell | Attempt to counter |
+| **Uncanny Dodge** | When hit by attack | Half damage (Rogue 5+) |
+| **Sentinel** | Enemy attacks ally | Free attack on attacker |
+
+Reactions reset at the start of your turn. Use `/reaction` to trigger manually.
+
+---
+
+## 💰 Loot & Treasure System
+
+Automatic loot generation when combat ends:
+
+### Loot by CR
+- **CR 0-4**: Mundane items, coins, minor gems
+- **CR 5-10**: Uncommon magic items, art objects, more gold
+- **CR 11-16**: Rare magic items, jewelry, significant treasure
+- **CR 17+**: Very rare/legendary items, hoards
+
+### Treasure Hoards
+Use `/treasure cr:X` to generate full hoards with:
+- Gold, silver, copper, platinum coins
+- Gems (10gp to 5000gp value)
+- Art objects (25gp to 7500gp value)
+- Magic items by rarity
+
+### Magic Item Rarities
+| Rarity | Typical CR | Examples |
+|--------|------------|----------|
+| Common | 1-4 | Potion of Healing, +1 Ammunition |
+| Uncommon | 5-10 | Bag of Holding, Cloak of Protection |
+| Rare | 11-16 | +2 Weapons, Flame Tongue |
+| Very Rare | 17+ | +3 Weapons, Staff of Power |
+| Legendary | 20+ | Vorpal Sword, Holy Avenger |
+
+---
+
+## 📊 Experience & Leveling
+
+Automatic XP tracking with level-up notifications:
+
+### XP Awards
+- **Combat**: Auto-calculated from defeated enemies when combat ends
+- **Party Distribution**: XP split evenly among all players
+- **Milestone**: Use `/awardparty` for story milestone rewards
+
+### Level Thresholds (D&D 5e)
+| Level | XP Required | Level | XP Required |
+|-------|-------------|-------|-------------|
+| 1 | 0 | 11 | 85,000 |
+| 2 | 300 | 12 | 100,000 |
+| 3 | 900 | 13 | 120,000 |
+| 4 | 2,700 | 14 | 140,000 |
+| 5 | 6,500 | 15 | 165,000 |
+| 6 | 14,000 | 16 | 195,000 |
+| 7 | 23,000 | 17 | 225,000 |
+| 8 | 34,000 | 18 | 265,000 |
+| 9 | 48,000 | 19 | 305,000 |
+| 10 | 64,000 | 20 | 355,000 |
+
+The `/xp` command shows a visual progress bar toward your next level!
 
 ---
 
@@ -250,7 +342,37 @@ TTS_PROVIDER=elevenlabs  # Options: elevenlabs, edge, disabled
 ```
 
 **Per-channel toggle:** Use `/voice false` to disable voice for a channel (saves credits!)
+### NPC Voice Variety
 
+The AI automatically assigns unique voices to different NPCs based on their characteristics:
+
+| Archetype | Voice Style | Examples |
+|-----------|-------------|----------|
+| **Elderly Wizard** | Wise, gravelly | Gandalf, Mordenkainen |
+| **Gruff Dwarf** | Deep, Scottish accent | Tavern keepers, smiths |
+| **Mysterious Elf** | Ethereal, melodic | Elven lords, seers |
+| **Menacing Villain** | Dark, sinister | Liches, dark lords |
+| **Cheerful Halfling** | Friendly, warm | Merchants, innkeepers |
+| **Noble Knight** | Commanding, regal | Kings, paladins |
+
+Voices are selected based on race, role, and personality tags in the AI response.
+
+### Ambient Music & SFX
+
+Set the mood with ambient soundscapes:
+
+| Mood | Description |
+|------|-------------|
+| `combat` | Tense battle music |
+| `exploration` | Adventurous wandering |
+| `tavern` | Cozy inn atmosphere |
+| `dungeon` | Dark, foreboding |
+| `mystery` | Suspenseful intrigue |
+| `victory` | Triumphant celebration |
+| `danger` | Ominous warning |
+| `peaceful` | Calm rest scenes |
+
+Sound effects: `sword`, `spell`, `explosion`, `door`, `coins`, `monster`, `heal`, `critical`
 ---
 
 ## 🧠 Campaign Memory System
@@ -368,8 +490,12 @@ ai-dm-voice/
 │   ├── handout_manager.py     # Handouts and secrets
 │   ├── map_manager.py         # Tactical battle maps
 │   ├── database.py            # SQLite storage layer
-│   ├── voice_map.py           # Voice ID mapping
-│   └── voice_parser.py        # Voice tag extraction + TTS cleanup
+│   ├── voice_map.py           # Voice ID mapping + NPC voice archetypes
+│   ├── voice_parser.py        # Voice tag extraction + TTS cleanup
+│   ├── xp_manager.py          # XP tracking + auto-leveling
+│   ├── loot_manager.py        # Treasure tables + loot generation
+│   ├── reaction_manager.py    # Combat reactions (Shield, AoO, etc.)
+│   └── ambient_manager.py     # Ambient music + sound effects
 ├── webportal/
 │   ├── routes.py              # Flask routes
 │   └── templates/             # HTML templates

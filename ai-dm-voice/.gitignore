@@ -53,3 +53,6 @@ logs/*.md
 state/*.json
 combat/*.json
 voice_profiles.json
+
+# Personal/local config
+agents.md

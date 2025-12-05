@@ -23,6 +23,49 @@ DC_PATTERN = re.compile(r'dc\s*(\d+)', re.IGNORECASE)
 LOOT_PATTERN = re.compile(r'you (?:find|found|pick up|obtain|grab) (?:a|an|the)?\s*"?([^"\n]+)"?', re.IGNORECASE)
 XP_PATTERN = re.compile(r"(?:defeated?|killed?|vanquished?)\s+(?:the\s+)?(\w+)", re.I)
 
+# Combat trigger patterns - detect when AI narrates combat starting
+COMBAT_TRIGGER_PATTERN = re.compile(
+    r'(?:roll\s+(?:for\s+)?initiative|'
+    r'combat\s+begins|'
+    r'(?:they|he|she|it)\s+attacks?\s+(?:you|the\s+party)|'
+    r'(?:lunges?|charges?|swings?|strikes?)\s+at\s+(?:you|the\s+party)|'
+    r'(?:draw|draws)\s+(?:their|his|her|its)\s+(?:weapon|sword|blade|axe)|'
+    r'ambush!|'
+    r'(?:battle|fight)\s+(?:begins|starts)|'
+    r'hostile\s+(?:and\s+)?attacks?)',
+    re.IGNORECASE
+)
+
+# Enemy extraction pattern - find enemy names/counts in combat narration
+ENEMY_EXTRACT_PATTERN = re.compile(
+    r'(\d+)?\s*(goblins?|orcs?|bandits?|skeletons?|zombies?|wolves?|spiders?|'
+    r'kobolds?|cultists?|thugs?|guards?|soldiers?|knights?|trolls?|ogres?|'
+    r'dire\s+wolves?|giant\s+spiders?|owlbears?|dragons?)',
+    re.IGNORECASE
+)
+
+
+def detect_combat_trigger(text):
+    """
+    Detect if the AI is narrating the start of combat.
+    Returns dict with 'trigger': True and 'enemies' list if found, else None.
+    """
+    if COMBAT_TRIGGER_PATTERN.search(text):
+        enemies = []
+        for match in ENEMY_EXTRACT_PATTERN.finditer(text):
+            count = int(match.group(1)) if match.group(1) else 1
+            enemy_type = match.group(2).lower()
+            # Normalize to singular
+            if enemy_type.endswith('s') and not enemy_type.endswith('ss'):
+                enemy_type = enemy_type[:-1]
+            for i in range(count):
+                if count > 1:
+                    enemies.append(f"{enemy_type}{i+1}")
+                else:
+                    enemies.append(enemy_type)
+        return {'trigger': True, 'enemies': enemies} if enemies else {'trigger': True, 'enemies': []}
+    return None
+
 
 def detect_skill_check(text):
     """
@@ -124,6 +167,19 @@ def get_dm_response(user_input, state, player_id=None, system_prompt=None):
         }
     else:
         state['pending_roll'] = None  # Clear if no roll requested
+    
+    # Check if AI is triggering combat
+    combat_trigger = detect_combat_trigger(reply)
+    if combat_trigger:
+        state['pending_combat'] = {
+            'trigger': True,
+            'enemies': combat_trigger.get('enemies', []),
+            'context': reply  # Store the narration for reference
+        }
+    else:
+        # Only clear if there's no active combat already
+        if not state.get('combat', {}).get('active'):
+            state['pending_combat'] = None
     
     # Check for loot
     loot_match = LOOT_PATTERN.search(reply)
