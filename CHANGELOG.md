@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.12.0] - 2025-12-06
+### Added
+- **NPC Memory & Dialogue System**: Complete NPC relationship and memory tracking
+  - New `utils/npc_manager.py` module (900+ lines) with comprehensive NPC management
+  - `NPC`, `Faction`, `NPCMemory`, `NPCDialogueState`, `ShopInventory` dataclasses
+  - NPC disposition tracking (-2 Hostile to +2 Allied)
+  - NPC mood tracking (happy, angry, sad, scared, suspicious, etc.)
+  - NPC memory of player names and facts they've learned
+  - Interaction counting and trust level tracking
+- **Faction Standing System**: Numerical reputation with factions
+  - Faction standings from -100 (Hunted Enemy) to +100 (Exalted Champion)
+  - Standing titles: Unknown, Known, Friendly, Trusted, Honored, etc.
+  - Faction relationships (allies/enemies)
+  - Standing change notifications with title updates
+- **Shop/Merchant System**: Persistent merchant inventories
+  - Shop types: general, weapons, armor, potions, magic
+  - Pre-defined inventory for each shop type
+  - Buy/sell functionality with buy rate (50% default)
+  - Shop gold reserves
+  - Stock quantity tracking
+- **Auto NPC Detection**: NPCs automatically registered from AI narration
+  - Voice tag extraction `[Voice: Character Name]`
+  - Race, gender, role, and mood detection from context
+  - Automatic voice assignment based on characteristics
+  - NPC notification when meeting new NPCs
+- **Enhanced AI Context**: NPCs and factions included in prompts
+  - Nearby NPCs listed with disposition and mood
+  - Faction standings included for roleplay context
+  - NPCs remember previous interactions
+- **New Commands**:
+  - `/npc` - View all NPCs or specific NPC details
+  - `/npc name:"Name" description:"..."` - Create/update NPC manually
+  - `/npcdisposition` - Modify NPC disposition toward party
+  - `/faction` - View all factions or specific faction details
+  - `/faction name:"Name" description:"..."` - Create faction
+  - `/reputation` - Modify party standing with a faction
+  - `/shop` - View or create merchant shop
+  - `/buy` - Purchase items from a merchant
+  - `/sell` - Sell items to a merchant
+
+### Changed
+- `/do` command now auto-detects NPCs from AI narration and registers them
+- `build_system_prompt()` now accepts optional `channel_id` for NPC context
+- AI prompts include nearby NPC dispositions and faction standings
+- NPCs react based on previous interactions and party reputation
+
 ## [0.11.0] - 2025-12-06
 ### Added
 - **Resource Auto-Consumption System**: Automatic detection and consumption of resources from narrative

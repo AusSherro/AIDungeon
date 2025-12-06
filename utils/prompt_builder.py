@@ -1,7 +1,7 @@
 """Prompt builder utilities for the Discord bot."""
 
 
-def build_system_prompt(state: dict) -> str:
+def build_system_prompt(state: dict, channel_id: str = None) -> str:
     """Return a system prompt describing the current campaign state."""
     title = state.get("campaign_title", "")
     realm = state.get("realm", "")
@@ -18,6 +18,28 @@ def build_system_prompt(state: dict) -> str:
         "normal": "Use standard D&D 5e difficulty. DCs range from 10-18 based on task.",
         "hard": "Be challenging. Enemies are tougher, DCs range 15-22, and consequences are real."
     }
+    
+    # Get NPC context if channel_id provided
+    npc_context = ""
+    faction_context = ""
+    if channel_id:
+        try:
+            from utils.npc_manager import get_nearby_npcs, get_faction_context_for_ai
+            nearby_npcs = get_nearby_npcs(channel_id, location)
+            if nearby_npcs:
+                npc_lines = []
+                for npc in nearby_npcs[:5]:  # Limit to 5 nearby NPCs
+                    disp_word = {-2: "hostile", -1: "unfriendly", 0: "neutral", 1: "friendly", 2: "allied"}.get(npc.disposition, "neutral")
+                    npc_lines.append(f"- {npc.name} ({npc.race} {npc.role}): {disp_word}, mood: {npc.current_mood}")
+                    if npc.memory.knows_names:
+                        npc_lines.append(f"  Knows: {', '.join(npc.memory.knows_names)}")
+                npc_context = "\n**Nearby NPCs:**\n" + "\n".join(npc_lines)
+            
+            faction_context = get_faction_context_for_ai(channel_id)
+            if faction_context:
+                faction_context = "\n" + faction_context
+        except Exception:
+            pass  # If NPC manager not available, skip
 
     system_prompt = f"""You are the Dungeon Master for a Discord-based D&D 5e campaign. Your role is to narrate the story, control NPCs, and respond to player actions with immersive descriptions.
 
@@ -30,12 +52,13 @@ def build_system_prompt(state: dict) -> str:
 
 **Party:** {party_comp if party_comp else 'Unknown adventurers'}
 
-**Recent Events:** {actions_text if actions_text else 'The adventure begins...'}
+**Recent Events:** {actions_text if actions_text else 'The adventure begins...'}{npc_context}{faction_context}
 
 **Your Response Style:**
 1. Describe the scene and NPC reactions vividly (2-3 sentences)
 2. Use [Voice: Character Name] tags for NPC dialogue
 3. Keep narration under 150 words
+4. NPCs should remember previous interactions and react accordingly to party reputation
 
 **CRITICAL - SKILL CHECKS:**
 Most actions in D&D require dice rolls! ALWAYS ask for a skill check when the player attempts:

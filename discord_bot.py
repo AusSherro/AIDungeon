@@ -136,6 +136,17 @@ from utils.resource_manager import (
     detect_spell_cast, detect_class_ability, detect_consumable_use,
     ResourceConsumption, DetectedSpell, DetectedAbility, DetectedConsumable
 )
+from utils.npc_manager import (
+    NPC, Faction, NPCRole, Disposition,
+    load_npcs, save_npcs, get_npc, create_npc,
+    update_npc_disposition, update_npc_mood, record_npc_interaction,
+    get_npc_context_for_ai, load_factions, save_factions, get_faction,
+    create_faction, modify_faction_standing, get_faction_context_for_ai,
+    create_merchant_shop, get_shop_inventory, buy_from_shop, sell_to_shop,
+    format_shop_inventory, assign_voice_to_npc, list_all_npcs, list_all_factions,
+    get_nearby_npcs, format_npc_summary, format_faction_summary,
+    process_npc_from_narration, get_standing_title
+)
 
 load_dotenv()
 Config.validate()
@@ -626,6 +637,21 @@ async def do_action(interaction: discord.Interaction, action: str):
     system_prompt = build_system_prompt(state)
     narration, updated_state = get_dm_response(action, state, user_id, system_prompt=system_prompt)
     
+    # ==== PHASE 5: Auto-detect NPCs from narration ====
+    current_location = updated_state.get('location', '')
+    detected_npc = process_npc_from_narration(channel_id, narration, current_location)
+    npc_notification = ""
+    if detected_npc and detected_npc.memory.interaction_count <= 1:
+        # New NPC detected - record interaction
+        char_names = []
+        for pid in updated_state.get('turn_order', [user_id]):
+            pchar = load_character(pid)
+            if pchar:
+                char_names.append(pchar.get('name', ''))
+        if char_names:
+            record_npc_interaction(channel_id, detected_npc.name, char_names)
+        npc_notification = f"\n\n👤 *New NPC met: **{detected_npc.name}** ({detected_npc.role.replace('_', ' ').title()})*"
+    
     # Process loot
     loot_items = updated_state.pop('recent_loot', [])
     voice_tag = extract_voice_tag(narration)
@@ -637,6 +663,10 @@ async def do_action(interaction: discord.Interaction, action: str):
     # Add resource consumption notifications
     if resource_summary:
         output += f"\n\n{resource_summary}"
+    
+    # Add NPC notification
+    if npc_notification:
+        output += npc_notification
     
     # Add loot notifications
     for item in loot_items:
@@ -1003,6 +1033,446 @@ async def remember_cmd(
             "• `quest:` Quest Name - Description",
             ephemeral=True
         )
+
+
+# =============================================================================
+# NPC & FACTION COMMANDS
+# =============================================================================
+
+NPC_ROLES = ["generic", "quest_giver", "merchant", "innkeeper", "guard", "noble", "villain", "ally", "informant"]
+SHOP_TYPES = ["general", "weapons", "armor", "potions", "magic"]
+
+@bot.tree.command(name="npc", description="View or manage NPCs in the campaign")
+@app_commands.describe(
+    name="NPC name to view or create",
+    description="Description for new NPC",
+    role="NPC's role in the world",
+    location="Where the NPC is located"
+)
+@app_commands.choices(role=[app_commands.Choice(name=r.replace('_', ' ').title(), value=r) for r in NPC_ROLES])
+async def npc_cmd(
+    interaction: discord.Interaction,
+    name: str = "",
+    description: str = "",
+    role: str = "",
+    location: str = ""
+):
+    """View NPC list, details, or create/update an NPC."""
+    channel_id = str(interaction.channel.id)
+    
+    if not name:
+        # List all NPCs
+        npcs = list_all_npcs(channel_id)
+        if not npcs:
+            await interaction.response.send_message(
+                "📋 No NPCs registered yet.\n"
+                "NPCs are auto-detected from AI narration, or use `/npc name:\"NPC Name\" description:\"...\"` to add manually.",
+                ephemeral=True
+            )
+            return
+        
+        embed = discord.Embed(
+            title="📋 Known NPCs",
+            description=f"**{len(npcs)}** NPCs in this campaign",
+            color=discord.Color.blue()
+        )
+        
+        for npc in npcs[:25]:  # Discord limit
+            disp_names = {-2: "⚔️", -1: "😠", 0: "😐", 1: "😊", 2: "💚"}
+            disp_icon = disp_names.get(npc.disposition, "😐")
+            role_text = npc.role.replace('_', ' ').title() if npc.role else "Unknown"
+            
+            value = f"{npc.race.title()} {role_text}"
+            if npc.location:
+                value += f"\n📍 {npc.location}"
+            if npc.shop:
+                value += f"\n🏪 {npc.shop.shop_name}"
+            
+            embed.add_field(
+                name=f"{disp_icon} {npc.name}",
+                value=value,
+                inline=True
+            )
+        
+        await interaction.response.send_message(embed=embed)
+    else:
+        # View or create specific NPC
+        npc = get_npc(channel_id, name)
+        
+        if npc and not description:
+            # View existing NPC
+            embed = discord.Embed(
+                title=f"👤 {npc.name}",
+                description=npc.description or "*No description*",
+                color=discord.Color.green() if npc.disposition > 0 else 
+                      discord.Color.red() if npc.disposition < 0 else 
+                      discord.Color.light_grey()
+            )
+            
+            disp_names = {-2: "Hostile", -1: "Unfriendly", 0: "Neutral", 1: "Friendly", 2: "Allied"}
+            embed.add_field(name="Race", value=npc.race.title(), inline=True)
+            embed.add_field(name="Role", value=npc.role.replace('_', ' ').title(), inline=True)
+            embed.add_field(name="Status", value=npc.status.title(), inline=True)
+            embed.add_field(name="Disposition", value=disp_names.get(npc.disposition, "Neutral"), inline=True)
+            embed.add_field(name="Mood", value=npc.current_mood.title(), inline=True)
+            
+            if npc.location:
+                embed.add_field(name="Location", value=npc.location, inline=True)
+            
+            if npc.memory.knows_names:
+                embed.add_field(name="Knows Players", value=", ".join(npc.memory.knows_names), inline=False)
+            
+            if npc.memory.knows_facts:
+                embed.add_field(name="Knows Facts", value="\n".join(f"• {f}" for f in npc.memory.knows_facts[-5:]), inline=False)
+            
+            if npc.factions:
+                faction_text = "\n".join(f"• {f}: {get_standing_title(s)}" for f, s in npc.factions.items())
+                embed.add_field(name="Faction Affiliations", value=faction_text, inline=False)
+            
+            if npc.dialogue_state.offered_quests:
+                embed.add_field(name="Offered Quests", value=", ".join(npc.dialogue_state.offered_quests), inline=False)
+            
+            if npc.shop:
+                embed.add_field(name="Shop", value=f"🏪 {npc.shop.shop_name} ({npc.shop.shop_type.title()})", inline=False)
+            
+            embed.set_footer(text=f"Interactions: {npc.memory.interaction_count} | Voice: {npc.voice_archetype or 'Default'}")
+            
+            await interaction.response.send_message(embed=embed)
+        else:
+            # Create or update NPC
+            state = load_state(channel_id)
+            current_location = location or state.get("location", "")
+            
+            npc = create_npc(
+                channel_id,
+                name=name,
+                description=description,
+                role=role or "generic",
+                location=current_location
+            )
+            
+            # Also add to legacy state for backwards compatibility
+            add_or_update_npc(state, name, description)
+            save_state(channel_id, state)
+            
+            await interaction.response.send_message(
+                f"👤 **{npc.name}** registered!\n"
+                f"Role: {npc.role.replace('_', ' ').title()} | Race: {npc.race.title()}\n"
+                f"Voice: {npc.voice_archetype or 'Default'}"
+            )
+
+
+@bot.tree.command(name="npcdisposition", description="Change an NPC's disposition toward the party")
+@app_commands.describe(
+    name="NPC name",
+    change="Amount to change disposition (-2 to +2)"
+)
+async def npc_disposition_cmd(
+    interaction: discord.Interaction,
+    name: str,
+    change: int
+):
+    """Modify an NPC's disposition toward the party."""
+    channel_id = str(interaction.channel.id)
+    
+    npc = update_npc_disposition(channel_id, name, change)
+    if not npc:
+        await interaction.response.send_message(f"❌ NPC **{name}** not found.", ephemeral=True)
+        return
+    
+    disp_names = {-2: "Hostile ⚔️", -1: "Unfriendly 😠", 0: "Neutral 😐", 1: "Friendly 😊", 2: "Allied 💚"}
+    direction = "improved" if change > 0 else "worsened"
+    
+    await interaction.response.send_message(
+        f"💭 **{npc.name}**'s disposition has {direction}!\n"
+        f"Now: **{disp_names.get(npc.disposition, 'Neutral 😐')}**"
+    )
+
+
+@bot.tree.command(name="faction", description="View or manage factions in the campaign")
+@app_commands.describe(
+    name="Faction name to view or create",
+    description="Description for new faction",
+    leader="Faction leader name",
+    headquarters="Faction headquarters location"
+)
+async def faction_cmd(
+    interaction: discord.Interaction,
+    name: str = "",
+    description: str = "",
+    leader: str = "",
+    headquarters: str = ""
+):
+    """View faction list, details, or create a faction."""
+    channel_id = str(interaction.channel.id)
+    
+    if not name:
+        # List all factions
+        factions = list_all_factions(channel_id)
+        if not factions:
+            await interaction.response.send_message(
+                "⚔️ No factions registered yet.\n"
+                "Use `/faction name:\"Faction Name\" description:\"...\"` to add one.",
+                ephemeral=True
+            )
+            return
+        
+        embed = discord.Embed(
+            title="⚔️ Factions",
+            description=f"**{len(factions)}** factions in this campaign",
+            color=discord.Color.purple()
+        )
+        
+        for faction in factions:
+            standing_icon = "💚" if faction.party_standing >= 50 else "😊" if faction.party_standing >= 0 else "😠" if faction.party_standing > -50 else "⚔️"
+            
+            value = f"Standing: {faction.standing_title} ({faction.party_standing:+d})"
+            if faction.leader:
+                value += f"\n👑 {faction.leader}"
+            if faction.headquarters:
+                value += f"\n🏰 {faction.headquarters}"
+            
+            embed.add_field(
+                name=f"{standing_icon} {faction.name}",
+                value=value,
+                inline=True
+            )
+        
+        await interaction.response.send_message(embed=embed)
+    else:
+        # View or create specific faction
+        faction = get_faction(channel_id, name)
+        
+        if faction and not description:
+            # View existing faction
+            embed = discord.Embed(
+                title=f"⚔️ {faction.name}",
+                description=faction.description or "*No description*",
+                color=discord.Color.green() if faction.party_standing >= 50 else
+                      discord.Color.gold() if faction.party_standing >= 0 else
+                      discord.Color.red()
+            )
+            
+            embed.add_field(name="Standing", value=f"{faction.standing_title} ({faction.party_standing:+d})", inline=True)
+            embed.add_field(name="Alignment", value=faction.alignment.title(), inline=True)
+            
+            if faction.leader:
+                embed.add_field(name="Leader", value=faction.leader, inline=True)
+            if faction.headquarters:
+                embed.add_field(name="Headquarters", value=faction.headquarters, inline=True)
+            
+            if faction.allies:
+                embed.add_field(name="Allies", value=", ".join(faction.allies), inline=False)
+            if faction.enemies:
+                embed.add_field(name="Enemies", value=", ".join(faction.enemies), inline=False)
+            
+            await interaction.response.send_message(embed=embed)
+        else:
+            # Create faction
+            faction = create_faction(
+                channel_id,
+                name=name,
+                description=description,
+                leader=leader,
+                headquarters=headquarters
+            )
+            
+            await interaction.response.send_message(
+                f"⚔️ **{faction.name}** faction created!\n"
+                f"Starting standing: {faction.standing_title}"
+            )
+
+
+@bot.tree.command(name="reputation", description="Modify party reputation with a faction")
+@app_commands.describe(
+    faction="Faction name",
+    change="Amount to change standing (-100 to +100)",
+    reason="Reason for the change (optional)"
+)
+async def reputation_cmd(
+    interaction: discord.Interaction,
+    faction: str,
+    change: int,
+    reason: str = ""
+):
+    """Modify the party's standing with a faction."""
+    channel_id = str(interaction.channel.id)
+    
+    result = modify_faction_standing(channel_id, faction, change, reason)
+    if not result:
+        await interaction.response.send_message(f"❌ Faction **{faction}** not found.", ephemeral=True)
+        return
+    
+    updated_faction, message = result
+    
+    color = discord.Color.green() if change > 0 else discord.Color.red()
+    embed = discord.Embed(
+        title=f"📊 Reputation Change: {updated_faction.name}",
+        description=message,
+        color=color
+    )
+    embed.add_field(name="Current Standing", value=f"{updated_faction.standing_title} ({updated_faction.party_standing:+d})")
+    
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="shop", description="View a merchant's shop or create one")
+@app_commands.describe(
+    merchant="Merchant NPC name",
+    shop_name="Name for the shop",
+    shop_type="Type of shop inventory"
+)
+@app_commands.choices(shop_type=[app_commands.Choice(name=t.title(), value=t) for t in SHOP_TYPES])
+async def shop_cmd(
+    interaction: discord.Interaction,
+    merchant: str,
+    shop_name: str = "",
+    shop_type: str = ""
+):
+    """View or create a merchant's shop."""
+    channel_id = str(interaction.channel.id)
+    
+    npc = get_npc(channel_id, merchant)
+    
+    if npc and npc.shop and not shop_type:
+        # View existing shop
+        inventory_text = format_shop_inventory(npc)
+        
+        embed = discord.Embed(
+            title=f"🏪 {npc.shop.shop_name}",
+            description=f"Proprietor: **{npc.name}**",
+            color=discord.Color.gold()
+        )
+        
+        # Split inventory into chunks for embed
+        items_text = []
+        for item in npc.shop.items:
+            if item['quantity'] > 0:
+                items_text.append(f"• **{item['name']}** - {item['price']} gp (x{item['quantity']})")
+        
+        if items_text:
+            embed.add_field(name="📦 Inventory", value="\n".join(items_text[:15]), inline=False)
+            if len(items_text) > 15:
+                embed.add_field(name="", value="\n".join(items_text[15:30]), inline=False)
+        else:
+            embed.add_field(name="📦 Inventory", value="*Shop is currently out of stock*", inline=False)
+        
+        embed.add_field(name="💰 Shop Gold", value=f"{npc.shop.gold_reserve} gp", inline=True)
+        embed.add_field(name="📊 Buy Rate", value=f"{int(npc.shop.buy_rate * 100)}%", inline=True)
+        
+        await interaction.response.send_message(embed=embed)
+    else:
+        # Create or update shop
+        if not shop_type:
+            shop_type = "general"
+        
+        npc = create_merchant_shop(
+            channel_id,
+            merchant,
+            shop_name=shop_name or f"{merchant}'s Shop",
+            shop_type=shop_type
+        )
+        
+        if not npc:
+            await interaction.response.send_message(f"❌ Could not create shop for **{merchant}**.", ephemeral=True)
+            return
+        
+        await interaction.response.send_message(
+            f"🏪 **{npc.shop.shop_name}** is now open!\n"
+            f"Merchant: {npc.name}\n"
+            f"Type: {shop_type.title()} Shop\n"
+            f"Use `/shop merchant:{merchant}` to view inventory."
+        )
+
+
+@bot.tree.command(name="buy", description="Buy an item from a shop")
+@app_commands.describe(
+    merchant="Merchant NPC name",
+    item="Item name to buy",
+    quantity="Number to buy (default: 1)"
+)
+async def buy_cmd(
+    interaction: discord.Interaction,
+    merchant: str,
+    item: str,
+    quantity: int = 1
+):
+    """Buy an item from a merchant."""
+    channel_id = str(interaction.channel.id)
+    user_id = str(interaction.user.id)
+    
+    result = buy_from_shop(channel_id, merchant, item, quantity)
+    if not result:
+        await interaction.response.send_message(
+            f"❌ Could not purchase **{item}**. Check that:\n"
+            f"• The merchant **{merchant}** exists and has a shop\n"
+            f"• The item is in stock\n"
+            f"• You requested a valid quantity",
+            ephemeral=True
+        )
+        return
+    
+    item_data, total_cost = result
+    
+    # Add to player inventory
+    char = load_character(user_id)
+    if char:
+        for _ in range(quantity):
+            add_inventory(user_id, item_data['name'])
+        save_character(user_id, char)
+    
+    await interaction.response.send_message(
+        f"💰 Purchased **{quantity}x {item_data['name']}** for **{total_cost} gp**!\n"
+        f"*{item_data.get('description', '')}*"
+    )
+
+
+@bot.tree.command(name="sell", description="Sell an item to a shop")
+@app_commands.describe(
+    merchant="Merchant NPC name",
+    item="Item name to sell",
+    base_price="Base price of the item in gold",
+    quantity="Number to sell (default: 1)"
+)
+async def sell_cmd(
+    interaction: discord.Interaction,
+    merchant: str,
+    item: str,
+    base_price: int,
+    quantity: int = 1
+):
+    """Sell an item to a merchant."""
+    channel_id = str(interaction.channel.id)
+    user_id = str(interaction.user.id)
+    
+    # Check player has the item
+    char = load_character(user_id)
+    if char:
+        inventory = char.get("inventory", [])
+        item_count = sum(1 for i in inventory if i.lower() == item.lower())
+        if item_count < quantity:
+            await interaction.response.send_message(
+                f"❌ You only have **{item_count}x {item}** in your inventory.",
+                ephemeral=True
+            )
+            return
+    
+    gold_received = sell_to_shop(channel_id, merchant, item, base_price, quantity)
+    if gold_received is None:
+        await interaction.response.send_message(
+            f"❌ Could not sell to **{merchant}**. The shop may not have enough gold.",
+            ephemeral=True
+        )
+        return
+    
+    # Remove from player inventory
+    if char:
+        for _ in range(quantity):
+            remove_inventory(user_id, item)
+    
+    await interaction.response.send_message(
+        f"💰 Sold **{quantity}x {item}** for **{gold_received} gp**!"
+    )
 
 
 # =============================================================================

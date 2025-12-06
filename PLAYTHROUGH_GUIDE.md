@@ -16,12 +16,13 @@
 10. [Loot & Treasure](#loot--treasure)
 11. [Spellcasting](#spellcasting)
 12. [Resource Auto-Consumption](#resource-auto-consumption)
-13. [Rest & Recovery](#rest--recovery)
-14. [DM Tools](#dm-tools)
-15. [Tactical Maps](#tactical-maps)
-16. [Player Handouts](#player-handouts)
-17. [Voice & Ambient](#voice--ambient)
-18. [Example Session](#example-session)
+13. [NPC Memory & Factions](#npc-memory--factions)
+14. [Rest & Recovery](#rest--recovery)
+15. [DM Tools](#dm-tools)
+16. [Tactical Maps](#tactical-maps)
+17. [Player Handouts](#player-handouts)
+18. [Voice & Ambient](#voice--ambient)
+19. [Example Session](#example-session)
 
 ---
 
@@ -548,6 +549,118 @@ If the auto-detection gets it wrong, you can manually manage:
 - Use `/cast` for explicit spell slot usage
 - Use `/inventory remove` to manually remove items
 - The DM can adjust resources as needed
+
+---
+
+## NPC Memory & Factions
+
+The bot tracks NPCs you meet and your relationships with factions.
+
+### NPC Tracking
+
+NPCs are automatically detected from AI narration:
+```
+AI: **Gundren Rockseeker**, a stout dwarf merchant, greets you warmly...
+Bot: 🎭 Met new NPC: Gundren Rockseeker (dwarf, merchant, friendly)
+```
+
+### Viewing NPCs
+```
+/npc
+```
+Lists all NPCs you've encountered with their disposition and role.
+
+```
+/npc name:Gundren
+```
+Shows detailed info about a specific NPC including:
+- Disposition toward party
+- Current mood
+- Role (merchant, quest giver, etc.)
+- What they know about you
+- Previous interactions
+
+### NPC Dispositions
+
+The AI and DM actions affect how NPCs feel about the party:
+
+| Disposition | Meaning |
+|-------------|---------|
+| **Allied** | Will risk their life for you |
+| **Friendly** | Helpful, offers discounts and aid |
+| **Neutral** | Standard interactions |
+| **Unfriendly** | Reluctant, charges higher prices |
+| **Hostile** | May attack or betray you |
+
+### Adjusting Disposition (DM)
+```
+/npcdisposition npc_name:Gundren change:1 reason:Rescued his brother
+```
+- Positive numbers improve disposition
+- Negative numbers worsen it
+- Changes are logged to NPC memory
+
+### Factions
+
+Track your reputation with organizations and groups:
+```
+/faction
+```
+Lists all factions and your standing with each.
+
+```
+/faction name:Thieves Guild
+```
+Creates a new faction to track.
+
+### Faction Standings
+
+| Standing | Range | Effect |
+|----------|-------|--------|
+| **Revered** | 75+ | Best prices, special quests, faction aid |
+| **Honored** | 50-74 | Good discounts, helpful members |
+| **Friendly** | 25-49 | Minor benefits |
+| **Neutral** | -24 to 24 | Standard treatment |
+| **Unfriendly** | -49 to -25 | Higher prices, suspicion |
+| **Hostile** | -74 to -50 | Refused service, active opposition |
+| **Nemesis** | -100 to -75 | Attack on sight |
+
+### Adjusting Reputation (DM)
+```
+/reputation faction:Thieves Guild change:15 reason:Completed heist job
+```
+
+### Merchants & Shops
+
+Create NPC merchants with persistent inventory:
+```
+/shop npc_name:Gundren type:general
+```
+Shop types: `general`, `weapons`, `armor`, `potions`, `magic`
+
+### Buying Items
+```
+/shop npc_name:Gundren
+```
+Shows available inventory with prices.
+
+```
+/buy npc_name:Gundren item:Rope quantity:2
+```
+Purchase items (gold auto-deducted).
+
+### Selling Items
+```
+/sell npc_name:Gundren item:Longsword
+```
+Sell items for 50% of base value.
+
+### NPC Voices
+
+Each NPC automatically gets a unique voice based on:
+- **Race** - Elves sound ethereal, dwarves gruff
+- **Role** - Nobles commanding, merchants friendly
+- **Gender** - Appropriate voice variants
 
 ---
 

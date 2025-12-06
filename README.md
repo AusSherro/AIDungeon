@@ -102,6 +102,19 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 | `/savingthrow <ability> <dc> [player]` | Request saving throw |
 | `/passivecheck <dc> <description>` | [DM] Secretly check passive perception |
 
+### NPCs & Factions
+| Command | Description |
+|---------|-------------|
+| `/npc` | View all NPCs in the campaign |
+| `/npc name:"Name" description:"..."` | Create or update an NPC |
+| `/npcdisposition name:NPC change:1` | Modify NPC disposition toward party |
+| `/faction` | View all factions and party standings |
+| `/faction name:"Name" description:"..."` | Create a new faction |
+| `/reputation faction:"Name" change:10` | Modify party reputation with faction |
+| `/shop merchant:"Name"` | View merchant's shop inventory |
+| `/buy merchant:"Name" item:"Item" quantity:1` | Buy from a merchant |
+| `/sell merchant:"Name" item:"Item" base_price:10` | Sell to a merchant |
+
 ### Loot & Treasure
 | Command | Description |
 |---------|-------------|
@@ -248,6 +261,67 @@ The system recognizes various ways to describe casting:
 - **Long Rest**: All spell slots, rage, bardic inspiration, all class resources
 
 Use `/resources` to view your current resource status at any time.
+
+---
+
+## 🎭 NPC Memory & Faction System
+
+NPCs remember who you are and how you've treated them:
+
+### NPC Relationships
+When you interact with NPCs, the system tracks:
+- **Disposition** - How the NPC feels about the party (hostile → unfriendly → neutral → friendly → allied)
+- **Mood** - Current emotional state (angry, sad, happy, fearful, suspicious, etc.)
+- **Memory** - Names they know, facts they've learned, previous interactions
+- **Role** - Quest giver, merchant, innkeeper, guard, noble, villain, etc.
+
+### Auto-Detection
+NPCs are automatically detected from AI narration:
+- "**Gundren Rockseeker** greets you warmly" → Creates NPC with friendly disposition
+- "The *mysterious stranger* eyes you suspiciously" → Creates NPC with suspicious mood
+- Races, genders, and roles are inferred from context
+
+### Disposition Levels
+| Level | Value | Description |
+|-------|-------|-------------|
+| Allied | +2 | Will risk life to help |
+| Friendly | +1 | Helpful, offers discounts |
+| Neutral | 0 | Standard interactions |
+| Unfriendly | -1 | Reluctant, higher prices |
+| Hostile | -2 | May attack or betray |
+
+### Faction Standings
+Track your reputation with organizations:
+- **Range**: -100 (Nemesis) to +100 (Revered)
+- **Effects**: Faction members react based on standing
+- **Consequences**: Actions toward members affect reputation
+
+| Standing | Range | Effect |
+|----------|-------|--------|
+| Revered | 75+ | Maximum discounts, special quests |
+| Honored | 50-74 | Good prices, faction aid |
+| Friendly | 25-49 | Minor benefits |
+| Neutral | -24 to 24 | Standard treatment |
+| Unfriendly | -49 to -25 | Higher prices, suspicion |
+| Hostile | -74 to -50 | Refused service |
+| Nemesis | -100 to -75 | Attack on sight |
+
+### Merchant Shops
+NPCs can run shops with persistent inventory:
+
+**Shop Types:**
+- **General Store** - Adventuring gear, rations, torches
+- **Weapons Shop** - Swords, axes, bows
+- **Armor Shop** - Leather, chain, plate
+- **Potions Shop** - Healing potions, antidotes
+- **Magic Shop** - Scrolls, wands, enchanted items
+
+### NPC Voice Assignment
+Each NPC automatically gets a unique voice based on:
+- **Race** - Elves sound ethereal, dwarves sound gruff
+- **Role** - Nobles sound commanding, merchants sound friendly
+- **Gender** - Male/female voice variants
+- **Mood** - Affects tone and delivery
 
 ---
 
@@ -580,6 +654,7 @@ AIDungeon/
 │   ├── loot_manager.py        # Treasure tables + loot generation
 │   ├── reaction_manager.py    # Combat reactions (Shield, AoO, etc.)
 │   ├── resource_manager.py    # Auto-consumption of spells, abilities, items
+│   ├── npc_manager.py         # NPC memory, factions, merchants, shops
 │   └── ambient_manager.py     # Ambient music + sound effects
 ├── webportal/
 │   ├── routes.py              # Flask routes
