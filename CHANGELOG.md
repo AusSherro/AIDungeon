@@ -1,6 +1,256 @@
 # Changelog
 
-## [0.14.0] - 2025-12-07
+## [0.20.0] - 2024-12-06
+### Added
+- **Session Continuity & Auto-Resume (Phase 15)**: Seamless session management
+  - New `utils/session_manager.py` module (700+ lines) with complete session tracking
+  - `SessionState`, `SessionSummary`, `PacingHint` dataclasses
+  - `SessionStatus` enum: inactive, starting, active, paused, ending, crashed
+  - `PacingPhase` enum: opening, rising, climax, falling, closing
+- **Session Tracking**: Automatic activity monitoring
+  - Session duration tracking from campaign start
+  - Action, combat, and rest counting per session
+  - Player activity tracking with timestamps
+  - Last activity tracking for inactivity detection
+- **Session Resume Detection**: Automatic resume offers
+  - `on_voice_state_update` event handler detects player voice joins
+  - Checks for resumable campaigns in text channels
+  - Sends resume prompt with last session info
+  - Auto-resumes paused sessions when players rejoin
+- **Session Pacing System**: DM guidance based on time
+  - Pacing phases: Opening (0-15m), Rising (15-60m), Climax (60-90m), Falling (90-120m), Closing (120m+)
+  - Pacing hints injected into AI prompts at phase thresholds
+  - Rest suggestions after 3 combats, 20 actions, or 60 minutes
+  - `/session` command shows current pacing phase
+- **Auto-Save & Recovery**: Crash protection
+  - `AutoSaveManager` class with periodic saves (every 5 minutes)
+  - Recovery points saved with full campaign state
+  - `/recover` command to restore from crash
+  - Inactivity timeout (30 minutes) pauses session automatically
+- **Session Recap System**: Previous session summaries
+  - `generate_session_recap()` builds narrative recap
+  - `SessionSummary` stored with key events, location, quests
+  - TTS narration of recap on resume
+  - Last 10 sessions saved per channel
+- **New Commands**
+  - `/session` - View current session status (view/end/pause actions)
+  - `/sessionrecap` - Get TTS recap of the previous session
+  - `/sessionhistory` - View past session summaries
+  - `/recover` - Recover from a crashed session
+
+### Changed
+- `/campaign` command now starts session tracking automatically
+- `/do` command records activity (action/combat) for session tracking
+- `build_system_prompt()` includes session pacing context
+- Campaign state saved periodically via auto-save
+
+### AI Prompt Changes
+- Added SESSION PACING CONTEXT section to prompts
+- AI sees session duration, pacing phase, action/combat counts
+- DM guidance hints based on session length
+- Rest suggestions when party has been very active
+
+## [0.19.0] - 2024-12-06
+### Added
+- **Intelligent Travel & Exploration (Phase 14)**: Narrative-driven travel system
+  - New `utils/world_map.py` module (900+ lines) with location graph and travel detection
+  - `Location`, `TravelIntent`, `LocationDiscovery`, `WorldState` dataclasses
+  - `LocationType` enum: city, town, village, dungeon, cave, ruins, tower, castle, temple, etc.
+  - `DiscoveryStatus` enum: unknown, heard_of, known, visited, explored
+- **Travel Intent Detection**: Automatic travel from narration
+  - Structured travel tag: `[TRAVEL: destination="Phandalin", distance=15, terrain=forest]`
+  - Location discovered tag: `[LOCATION_DISCOVERED: name="Ruined Tower", terrain=hills, poi=true]`
+  - Arrival tag: `[ARRIVAL: "Phandalin"]` to mark journey completion
+  - Distance revealed tag: `[DISTANCE_REVEALED: from="A" to="B" miles=100]`
+  - Natural language detection: "We head to Phandalin", "Let's travel to the forest"
+- **World Map System**: Automatic location tracking
+  - Location graph with connections and distances
+  - Visited/explored status tracking per location
+  - Points of interest (POI) marking for significant locations
+  - Total miles traveled tracking
+  - Location notes and tags
+- **Fast Travel System**: Quick travel to known locations
+  - Fast travel available to visited/explored locations only
+  - Reduced travel time with no encounter rolls
+  - Automatic distance calculation from world map connections
+- **New Commands**
+  - `/worldmap` - View all known locations and travel connections
+  - `/fasttravel` - Instantly travel to a visited location
+  - `/addlocation` - Manually add a location to the world map
+  - `/setlocation` - Set the party's current location
+  - `/locationinfo` - View detailed information about a location
+
+### Changed
+- `/do` command now detects and processes travel-related tags
+- Travel notifications displayed for journey start, arrival, and discoveries
+- `build_system_prompt()` includes world map context with nearby locations
+- Campaign state location updates automatically on arrival
+
+### AI Prompt Changes
+- Added TRAVEL & EXPLORATION TAGS section with structured tag formats
+- AI can use `[TRAVEL:]`, `[LOCATION_DISCOVERED:]`, `[ARRIVAL:]`, `[DISTANCE_REVEALED:]`
+- Examples show proper travel narration with tags
+- World map context included showing current location and connections
+
+## [0.18.0] - 2024-12-06
+### Added
+- **Autonomous Quest & Story Management (Phase 13)**: Quests auto-create from NPC dialogue
+  - Structured quest tags: `[QUEST: name="...", type=rescue, difficulty=hard, giver="NPC"]`
+  - Automatic quest creation when AI uses quest tags in narration
+  - Quest completion tag: `[QUEST_COMPLETE: "Quest Name"]` auto-completes and awards rewards
+  - Quest progress tag: `[QUEST_PROGRESS: "Quest Name", objective=1]` updates objectives
+  - Quest objective tag: `[OBJECTIVE: "New objective"]` adds objectives dynamically
+  - Quest hook tag: `[QUEST_HOOK: name="...", description="..."]` creates available quests
+  - Quest chain tag: `[QUEST_CHAIN: parent="...", child="..."]` links quests sequentially
+- **Rumor System**: Track overheard hints for future adventures
+  - Rumor tag: `[RUMOR: "Strange lights near the cemetery"]` records rumors
+  - Rumors stored per channel and can be investigated to become quests
+  - New `/rumors` command: View all heard rumors
+  - New `/investigaterumor` command: Convert rumor to active quest
+- **Quest Chains**: Linked quest sequences
+  - New `link_quests()` and `activate_chain_quest()` functions
+  - Completing parent quest auto-unlocks child quest
+  - New `/questchain` command: Link two quests in sequence
+- **Enhanced Quest Detection**
+  - Improved natural language detection for quest offers
+  - Quest type detection from keywords (rescue, fetch, bounty, etc.)
+  - Difficulty inference from context (dangerous→hard, simple→easy)
+  - NPC quest giver detection from narration
+- **New Commands**
+  - `/rumors` - View all rumors the party has heard
+  - `/investigaterumor` - Convert a rumor into an active quest
+  - `/questchain` - Link two quests in sequence
+  - `/acceptquest` - Accept an available quest
+
+### Changed
+- `process_narration_for_quests()` now accepts `source_npc` parameter
+- Function handles structured tags before natural language detection
+- Quest creation now supports `tags` parameter for categorization
+- `/do` command displays quest creation, rumor, and chain notifications
+
+### AI Prompt Changes
+- Added QUEST TAGS section with structured tag formats and examples
+- AI can use `[QUEST:]`, `[QUEST_COMPLETE:]`, `[QUEST_PROGRESS:]`
+- AI can use `[RUMOR:]`, `[QUEST_HOOK:]`, `[OBJECTIVE:]`, `[QUEST_CHAIN:]`
+- Examples show proper quest offer and completion narration
+
+## [0.17.0] - 2024-12-06
+### Added
+- **Dynamic Environment Generation**: Automatic environment from AI narration
+  - New `utils/world_generator.py` module (800+ lines) with environment detection and location memory
+  - `TimeState`, `LocationMemory`, `EnvironmentChange` dataclasses for structured data
+  - Structured environment tags: `[WEATHER: rain]`, `[LIGHTING: dim]`, `[LOCATION: cave]`
+  - Additional tags: `[TIME: 3 hours pass]`, `[TRAP: pit trap]`, `[HAZARD: lava pool]`
+  - Natural language detection fallback for weather, lighting, and location keywords
+- **Time Tracking System**: In-game time management
+  - Hour/day/month/year tracking starting at 8 AM, Day 1
+  - Time periods: dawn, morning, midday, afternoon, evening, dusk, night
+  - Automatic lighting updates based on time-of-day for outdoor locations
+  - Time advancement through rests and travel
+  - New `/time` command: view, advance, and set time
+- **Location Memory System**: Persistent environment per location
+  - Environment state saved when leaving a location
+  - Automatic restoration when returning to a location
+  - Indoor/outdoor classification affects lighting behavior
+  - Weather, lighting, terrain tracked per location
+- **Location Presets**: 25+ location types with automatic environment
+  - Indoor: cave, dungeon, crypt, tavern, temple, castle, tower, mine, sewer
+  - Outdoor: forest, swamp, mountain, desert, arctic, plains, road, city
+  - Each preset configures lighting, weather, terrain automatically
+  - New `/location` command to set location and apply presets
+
+### Changed
+- `/do` command now detects and applies environment changes from AI narration
+- `build_system_prompt()` includes time/location context and environment tag instructions
+- Environment changes display notifications (weather, lighting, location, time)
+
+### AI Prompt Changes
+- Added ENVIRONMENT TAGS section with structured tag formats
+- AI can use `[WEATHER:]`, `[LIGHTING:]`, `[LOCATION:]`, `[TIME:]`, `[TRAP:]`, `[HAZARD:]`
+- System auto-applies appropriate presets based on detected location type
+- Time context included showing current time period
+
+## [0.16.0] - 2024-12-06
+### Added
+- **AI Combat Trigger Detection**: Automatic combat initiation from AI narration and player intent
+  - New `utils/combat_trigger.py` module (500+ lines) with combat detection and loot generation
+  - `CombatTriggerResult`, `CombatInitiator`, `EnemySpec` dataclasses for structured combat data
+  - Structured combat tags: AI uses `[COMBAT: 3 goblins, 1 hobgoblin]` format
+  - Surprise round tags: `[SURPRISE: enemies]` for ambushes, `[SURPRISE: party]` for player surprise
+  - AI combat phrase detection ("they attack", "roll for initiative", "combat begins")
+  - Player attack intent detection ("I attack the goblin", "I cast fireball at")
+- **Enemy Stat Lookup**: Automatic enemy stats from `dnd5e_data.py` MONSTERS database
+  - `/fight goblin goblin orc` now auto-populates HP/AC from database
+  - Custom stats still supported with name:hp:ac format
+  - Fallback to CR-based defaults for unknown monsters
+- **Post-Combat Loot Automation**: Automatic loot generation when combat ends
+  - CR-based loot tables: gold, mundane items, magic items
+  - Claimable loot piles using `/claimloot` command
+  - Unidentified magic items prompt for `/identify`
+  - Integration with existing `loot_manager.py` system
+- **Surprise Round Mechanics**: Proper D&D 5e surprise handling
+  - Surprised combatants skip their first turn
+  - Clear surprise round notifications
+  - Stealth vs Passive Perception calculations
+
+### Changed
+- `/do` command now detects player attack intent before AI call
+- `/do` command detects AI combat triggers after narration
+- `/fight` command accepts simple format (e.g., `goblin goblin orc`) with auto-lookup
+- `build_system_prompt()` now includes combat trigger format instructions
+- `process_post_combat()` uses new loot generation system
+
+### AI Prompt Changes
+- Added COMBAT TRIGGERS section instructing AI to use structured tags
+- AI now outputs `[COMBAT: <count> <creature>, ...]` when hostilities begin
+- AI outputs `[SURPRISE: enemies/party]` for surprise situations
+- Action suggestions disabled during active combat
+
+## [0.15.0] - 2024-12-06
+### Added
+- **Random Encounter & Travel System**: Complete travel and encounter management
+  - New `utils/encounter_manager.py` module (900+ lines) with encounters, travel, and events
+  - `Encounter`, `TravelState`, `Monster` dataclasses for structured encounter data
+  - Enums: `TerrainType`, `EncounterDifficulty`, `TravelPace`, `EventType`
+- **Travel System**: Track party journeys between locations
+  - Pace-based travel: slow (stealth possible), normal, fast (-5 passive perception)
+  - Terrain modifiers affecting travel speed and encounter chance
+  - Distance tracking with miles traveled/remaining
+  - Day/hour progress with 8-hour travel days
+  - Automatic location updates on arrival
+- **Combat Encounter Generation**: DMG-compliant encounter building
+  - Party level-based XP thresholds for easy/medium/hard/deadly difficulties
+  - Monster database: 50+ monsters organized by CR (0 to 10)
+  - CR-appropriate monster selection based on party composition
+  - Encounter multipliers for multiple monsters (DMG rules)
+  - XP reward calculations
+- **Terrain-Based Encounter Tables**: 14 terrain types with unique encounters
+  - Terrain types: road, forest, plains, mountains, hills, swamp, desert, arctic, coastal, urban, underground, underdark, jungle, ruins
+  - Each terrain has combat, social, and discovery encounter tables
+  - Terrain modifiers for encounter chance and travel speed
+- **Non-Combat Events**: Random events during travel
+  - Social encounters: merchants, travelers, patrols, refugees
+  - Discovery encounters: ruins, shrines, camps, natural wonders
+  - Weather events: storm, fog, heat wave, cold snap
+  - Rest sites: shelter, water source, defensible position
+- **Enhanced AI Context**: Travel status included in AI prompts
+  - Current journey progress shown to AI
+  - Terrain and pace awareness for narration
+- **New Commands**:
+  - `/travel` - Start a journey with destination, distance, terrain, and pace
+  - `/travelstatus` - View current travel progress with visual progress bar
+  - `/traveladvance` - Advance travel by hours (checks for encounters)
+  - `/travelcancel` - Cancel current journey
+  - `/randomencounter` - Generate a random combat encounter for the party
+  - `/encounter` - Generate a non-combat encounter (social, discovery, weather, etc.)
+  - `/encountercheck` - Roll for a random encounter based on terrain and conditions
+
+### Changed
+- `build_system_prompt()` now includes travel context
+- Travel arrival updates campaign location automatically
+- Encounter system stores pending encounter for `/combat` integration
+
+## [0.14.0] - 2024-12-06
 ### Added
 - **Environmental Hazard Automation**: Complete environment management system
   - New `utils/environment_manager.py` module (1000+ lines) with traps, weather, lighting, terrain, and hazards
@@ -52,7 +302,7 @@
 - `build_system_prompt()` now includes environment context
 - Trap trigger notifications shown in `/do` output with save DC
 
-## [0.13.0] - 2025-12-06
+## [0.13.0] - 2024-12-06
 ### Added
 - **Quest & Objective Tracking System**: Comprehensive quest management with progress tracking
   - New `utils/quest_manager.py` module (800+ lines) with full quest management
@@ -99,7 +349,7 @@
 - Quest completion triggers reward notifications in chat
 - Completed objectives and quests shown in `/do` output
 
-## [0.12.0] - 2025-12-06
+## [0.12.0] - 2024-12-06
 ### Added
 - **NPC Memory & Dialogue System**: Complete NPC relationship and memory tracking
   - New `utils/npc_manager.py` module (900+ lines) with comprehensive NPC management
@@ -145,7 +395,7 @@
 - AI prompts include nearby NPC dispositions and faction standings
 - NPCs react based on previous interactions and party reputation
 
-## [0.11.0] - 2025-12-06
+## [0.11.0] - 2024-12-06
 ### Added
 - **Resource Auto-Consumption System**: Automatic detection and consumption of resources from narrative
   - New `utils/resource_manager.py` module (700+ lines) with comprehensive resource tracking
@@ -182,7 +432,7 @@
 - Resource consumption notifications appear after narration
 - Spell slots, class abilities, and consumables tracked in real-time
 
-## [0.10.0] - 2025-12-06
+## [0.10.0] - 2024-12-06
 ### Added
 - **Skill Check Resolution Loop**: Complete closed-loop skill check system with AI narration
   - New `utils/skill_check_manager.py` module (600+ lines) with comprehensive check handling
@@ -215,7 +465,7 @@
 - Skill checks detected in AI narration now trigger interactive player prompts
 - Roll results automatically re-injected to AI for consequence narration
 
-## [0.9.0] - 2025-12-06
+## [0.9.0] - 2024-12-06
 ### Added
 - **Combat Flow Auto-Advance System**: Complete turn automation and pacing
   - New `utils/combat_flow.py` module (600+ lines) with comprehensive combat flow management
@@ -255,7 +505,7 @@
 - `/endcombat` command now processes post-combat automation (XP, loot, rest offer)
 - `/combatinfo` enhanced with timer display, health icons, and type indicators
 
-## [0.8.0] - 2025-12-06
+## [0.8.0] - 2024-12-06
 ### Added
 - **Enemy AI Turn Automation**: Complete AI-driven enemy behavior system
   - New `utils/enemy_ai.py` module (700+ lines) with tactical decision making
@@ -286,7 +536,7 @@
 - `/cast` command now checks for legendary action opportunities after spellcasting
 - Combat flow automatically applies damage from enemy attacks to targets
 
-## [0.7.0] - 2025-12-06
+## [0.7.0] - 2024-12-06
 ### Added
 - **XP & Auto-Leveling System**: Automatic experience point tracking
   - XP awarded when combat ends based on enemy CR

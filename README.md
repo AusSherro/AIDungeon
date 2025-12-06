@@ -87,13 +87,16 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 ### Combat
 | Command | Description |
 |---------|-------------|
-| `/fight goblin*3 orc` | Start combat with monsters from database |
-| `/fight goblin:15:13 orc:25:14` | Start combat (name:hp:ac for custom) |
+| `/fight goblin goblin orc` | Start combat (auto-looks up stats from database) |
+| `/fight goblin*3 orc` | Start combat with multiples (3 goblins + 1 orc) |
+| `/fight goblin:15:13 orc:25:14` | Start combat with custom stats (name:hp:ac) |
 | `/attack target:Goblin bonus:5 damage:1d8+3` | Attack a target |
 | `/combatinfo` | View turn order and HP |
 | `/nextturn` | Advance to next combatant |
 | `/reaction` | Use your reaction (Shield, Counterspell, etc.) |
 | `/endcombat` | End combat (auto-awards XP and generates loot!) |
+
+> **Auto Combat**: Combat can also start automatically! When you attack in `/do` or the AI narrates hostilities, combat triggers automatically with enemies parsed from the narrative.
 
 ### Skill Checks
 | Command | Description |
@@ -128,10 +131,28 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 | `/questnote quest_name:"Name" note:"..."` | Add note to a quest |
 | `/questtemplate template:bounty name:"..." description:"..."` | Create from template |
 
+### Travel & World Map
+| Command | Description |
+|---------|-------------|
+| `/worldmap` | View all discovered locations and connections |
+| `/fasttravel destination:"Phandalin"` | Fast travel to a visited location |
+| `/addlocation name:"Tower" terrain:hills type:ruins` | Add location to world map |
+| `/setlocation location:"Phandalin"` | Set current location |
+| `/locationinfo location:"Cave"` | View detailed location info |
+| `/travel destination:"Town" distance:30` | Start manual travel (optional) |
+| `/travelstatus` | Check current travel progress |
+| `/traveladvance hours:4` | Advance travel by hours |
+| `/randomencounter difficulty:medium` | Generate combat encounter |
+| `/encounter event_type:social` | Generate non-combat encounter |
+
+> **Intelligent Travel:** Just use `/do We head to Phandalin` - the AI automatically detects travel intent and narrates the journey using structured tags!
+
 ### Environment & Hazards
 | Command | Description |
 |---------|-------------|
 | `/environment` | View full environment status (weather, lighting, hazards) |
+| `/time` | View or advance in-game time |
+| `/location location:"cave"` | Set location with automatic presets |
 | `/trap action:create name:"Pit Trap"` | Create a custom trap |
 | `/trap action:create template:poison_dart` | Create from 10 pre-built templates |
 | `/trap action:list` | View all traps in the area |
@@ -143,11 +164,25 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 | `/terrain action:create name:"Rubble" terrain_type:difficult` | Add terrain zone |
 | `/cover attacker_x:5 attacker_y:5 target_x:10 target_y:5` | Calculate cover between positions |
 
+> **Note:** Environment is also set automatically! The AI uses tags like `[LOCATION: cave]` and `[WEATHER: rain]` to change the environment during narration.
+
 ### Loot & Treasure
 | Command | Description |
 |---------|-------------|
 | `/loot [cr]` | Generate random loot by CR |
 | `/treasure cr:5` | Generate a full treasure hoard |
+
+### Session Management
+| Command | Description |
+|---------|-------------|
+| `/session` | View current session status (duration, phase, activity) |
+| `/session action:end` | End session and generate summary |
+| `/session action:pause` | Pause session |
+| `/sessionrecap` | Get TTS recap of previous session |
+| `/sessionhistory` | View past session summaries |
+| `/recover` | Recover from a crashed session |
+
+> **Auto-Resume:** When players join a voice channel, the bot detects if they have a campaign and offers to resume! Sessions are automatically saved every 5 minutes.
 
 ### Campaign Memory
 | Command | Description |
@@ -400,6 +435,13 @@ Quest progress is automatically detected from AI narration:
 - "The dragon is slain" → Defeat objective completes
 - "The hostages are freed" → Rescue objective completes
 
+### Autonomous Quest Creation (Phase 13)
+The AI can create quests automatically using structured tags:
+```
+[QUEST: name="Rescue the Daughter", type=rescue, difficulty=medium, giver="Old Farmer"]
+```
+This creates the quest automatically when the NPC offers it!
+
 ### Quest Commands
 | Command | Description |
 |---------|-------------|
@@ -412,6 +454,10 @@ Quest progress is automatically detected from AI narration:
 | `/questprogress <quest> <num> [amount]` | Update progress |
 | `/questnote <quest> <note>` | Add player note |
 | `/questtemplate <type> <name> <desc>` | Create from template |
+| `/rumors` | View heard rumors |
+| `/investigaterumor <num> <name>` | Convert rumor to quest |
+| `/questchain <parent> <child>` | Link quests in sequence |
+| `/acceptquest <name>` | Accept an available quest |
 
 ### Quest Templates
 Quick-create quests with pre-defined objectives:
@@ -421,6 +467,13 @@ Quick-create quests with pre-defined objectives:
 - **Investigate** - Gather clues → Interview witnesses → Uncover truth
 - **Clear Dungeon** - Enter → Clear threats → Secure area
 - **Escort** - Meet client → Protect journey → Deliver safely
+
+### Rumor System
+NPCs can share rumors that become future quests:
+```
+[RUMOR: "Strange lights at the old cemetery"]
+```
+View with `/rumors`, investigate with `/investigaterumor`.
 
 ---
 
@@ -654,9 +707,22 @@ The AI remembers your adventure through a layered memory system:
 
 ### Starting Combat
 ```
+/fight goblin goblin orc # Simple format - auto-lookup stats from database
 /fight goblin*3 orc      # 3 goblins + 1 orc from monster database
 /fight custom:20:15      # Custom enemy with 20 HP, 15 AC
 ```
+
+### Automatic Combat Triggers
+Combat can start automatically from:
+- **Player Attack Intent**: `/do I attack the goblin` triggers combat
+- **AI Narration**: AI outputs `[COMBAT: 3 goblins, 1 orc]` tag
+- **Hostility Phrases**: "They attack!", "Roll for initiative!"
+
+### Surprise Rounds
+The AI can also trigger surprise:
+- `[SURPRISE: enemies]` - Enemies are caught off guard
+- `[SURPRISE: party]` - Party is ambushed
+Surprised creatures skip their first turn.
 
 ### Combat Features
 - **Auto-Initiative** using DEX modifiers
@@ -668,6 +734,13 @@ The AI remembers your adventure through a layered memory system:
 - **Regeneration** (blocked by fire/acid)
 - **Readied Actions** with trigger conditions
 - **Delayed Turns** for tactical positioning
+
+### Post-Combat Loot
+When combat ends, loot is automatically generated:
+- Gold based on enemy CR
+- Mundane items (weapons, armor)
+- Magic items for higher CR encounters
+- Use `/claimloot`, `/splitgold`, `/identify`
 
 ### Combat Commands
 ```

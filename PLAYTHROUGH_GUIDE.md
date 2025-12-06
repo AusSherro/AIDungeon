@@ -19,12 +19,14 @@
 13. [NPC Memory & Factions](#npc-memory--factions)
 14. [Quest Tracking](#quest-tracking)
 15. [Environment & Hazards](#environment--hazards)
-16. [Rest & Recovery](#rest--recovery)
-17. [DM Tools](#dm-tools)
-18. [Tactical Maps](#tactical-maps)
-19. [Player Handouts](#player-handouts)
-20. [Voice & Ambient](#voice--ambient)
-21. [Example Session](#example-session)
+16. [Travel & Random Encounters](#travel--random-encounters)
+17. [Session Management](#session-management)
+18. [Rest & Recovery](#rest--recovery)
+19. [DM Tools](#dm-tools)
+20. [Tactical Maps](#tactical-maps)
+21. [Player Handouts](#player-handouts)
+22. [Voice & Ambient](#voice--ambient)
+23. [Example Session](#example-session)
 
 ---
 
@@ -206,13 +208,48 @@ If you don't click the roll button within **60 seconds**, the system auto-rolls 
 
 ## Combat System
 
-### Start Combat
+### Starting Combat Manually
 ```
 /fight <enemies>
 ```
-Example: `/fight 3 goblins and an orc warchief`
+Examples:
+- `/fight goblin goblin orc` - Simple format, auto-looks up stats from database
+- `/fight goblin*3 orc` - 3 goblins + 1 orc from monster database
+- `/fight troll:84:15 Custom Boss:50:16` - Custom enemies with HP:AC
 
-This rolls initiative for everyone and starts turn tracking.
+### Automatic Combat Triggers
+
+Combat can start automatically in several ways:
+
+**1. Player Attack Intent**
+```
+/do I attack the goblin
+/do I cast fireball at the group
+/do I draw my sword and charge at the bandit
+```
+The system detects attack intent and the AI will trigger combat with appropriate enemies.
+
+**2. AI Combat Narration**
+When the AI narrates hostilities, it uses structured tags:
+```
+"The goblins leap from hiding! [COMBAT: 3 goblins, 1 hobgoblin]"
+```
+Combat automatically starts with those enemies.
+
+**3. Surprise Rounds**
+```
+"[SURPRISE: enemies]" - The party gets a surprise round
+"[SURPRISE: party]" - Enemies ambushed you!
+```
+Surprised creatures skip their first turn.
+
+### How Automatic Combat Works
+
+1. You use `/do` with an attack action
+2. AI receives hint about combat intent  
+3. AI narrates the scene with `[COMBAT: enemy list]` tag
+4. System parses enemies and looks up their stats
+5. Combat starts automatically with proper initiative
 
 ### View Combat Status
 ```
@@ -239,6 +276,18 @@ Moves to the next combatant in initiative order.
 /endcombat
 ```
 Ends the encounter, automatically awards XP to the party, and generates loot from defeated enemies.
+
+### Post-Combat Loot
+
+When combat ends, loot is automatically generated based on enemy CR:
+- Gold appropriate to enemy difficulty
+- Mundane weapons and armor
+- Magic items for higher CR encounters
+
+Use these commands to claim loot:
+- `/claimloot` - Pick up items from the loot pile
+- `/splitgold` - Divide gold among party members
+- `/identify` - Identify unknown magic items
 
 ---
 
@@ -668,7 +717,35 @@ Each NPC automatically gets a unique voice based on:
 
 ## Quest Tracking
 
-The quest system tracks your objectives, progress, and rewards throughout the adventure. Quests can be created manually by the DM, from templates, or detected automatically from AI narration.
+The quest system tracks your objectives, progress, and rewards throughout the adventure. Quests can be created manually by the DM, from templates, or **detected automatically from AI narration using structured tags**.
+
+### Autonomous Quest Creation (Phase 13)
+
+The AI can now create quests automatically by including special tags in its narration. When an NPC offers a quest, the AI includes:
+
+```
+"The old farmer looks desperate. 'Please, heroes! Goblins have taken my daughter!'"
+[QUEST: name="Rescue the Farmers Daughter", type=rescue, difficulty=medium, giver="Old Farmer"]
+```
+
+This automatically creates the quest in your quest log. You'll see a notification:
+
+```
+📜 **New Quest:** Rescue the Farmers Daughter
+*Quest from Old Farmer*
+```
+
+**Available Quest Tags:**
+
+| Tag | Example | Effect |
+|-----|---------|--------|
+| `[QUEST:]` | `[QUEST: name="...", type=rescue, difficulty=hard]` | Creates new quest |
+| `[QUEST_COMPLETE:]` | `[QUEST_COMPLETE: "Quest Name"]` | Completes quest, awards rewards |
+| `[QUEST_PROGRESS:]` | `[QUEST_PROGRESS: "Quest", objective=1]` | Updates objective progress |
+| `[RUMOR:]` | `[RUMOR: "Strange lights at cemetery"]` | Records rumor |
+| `[QUEST_HOOK:]` | `[QUEST_HOOK: name="...", description="..."]` | Creates available quest |
+| `[OBJECTIVE:]` | `[OBJECTIVE: "Find the entrance"]` | Adds new objective |
+| `[QUEST_CHAIN:]` | `[QUEST_CHAIN: parent="...", child="..."]` | Links quests |
 
 ### Viewing Your Quest Log
 ```
@@ -696,6 +773,54 @@ Clear out the goblin threat on the Triboar Trail
 /quest name:Lost Mine
 ```
 Shows detailed information including notes, rewards, and quest giver.
+
+### Rumor System
+
+NPCs can share rumors that hint at future adventures:
+
+```
+A drunk at the tavern mutters: "Ye hear about the lights at the cemetery?"
+[RUMOR: "Strange lights at the old cemetery at night"]
+```
+
+You'll see: `👂 **Rumor heard:** *"Strange lights at the old cemetery at night"*`
+
+**Viewing Rumors:**
+```
+/rumors
+```
+Shows all rumors the party has heard, both investigated and uninvestigated.
+
+**Investigating Rumors:**
+```
+/investigaterumor rumor_number:1 quest_name:Investigate the Cemetery
+```
+Converts a rumor into an active quest for the party to pursue.
+
+### Quest Chains
+
+Quests can be linked so completing one unlocks another:
+
+```
+[QUEST_CHAIN: parent="Rescue the Daughter", child="Find the Goblin Lair"]
+```
+
+Or manually:
+```
+/questchain parent_quest:Rescue the Daughter child_quest:Find the Goblin Lair
+```
+
+When the parent quest completes, you'll see:
+```
+🔓 **Quest Unlocked:** Find the Goblin Lair
+```
+
+### Accepting Available Quests
+
+Quest hooks create "available" quests that aren't active yet:
+```
+/acceptquest quest_name:Investigate the Cemetery
+```
 
 ### Creating Quests (DM)
 ```
@@ -776,10 +901,18 @@ The system automatically detects quest progress from AI narration:
 - Delivery: "delivered", "handed over", "completed delivery"
 
 ### Completing Quests
+
+Quests complete automatically when the AI includes:
+```
+[QUEST_COMPLETE: "Quest Name"]
+```
+
+Or manually:
 ```
 /questcomplete quest:Goblin Bounty
 ```
-Completes the quest and awards rewards:
+
+Either way awards rewards:
 ```
 🎉 Quest Complete: Goblin Bounty!
 
@@ -807,6 +940,10 @@ Abandons the quest (can be re-accepted later).
 | `/questnote` | Add note to quest |
 | `/questcomplete` | Complete a quest |
 | `/questabandon` | Abandon a quest |
+| `/rumors` | View heard rumors |
+| `/investigaterumor` | Convert rumor to quest |
+| `/questchain` | Link quests in sequence |
+| `/acceptquest` | Accept available quest |
 
 ---
 
@@ -994,11 +1131,62 @@ Calculate cover between two positions:
 | Three-Quarters | +5 | +5 |
 | Full | Cannot be targeted | Cannot be targeted |
 
+### Dynamic Environment (Automatic)
+
+The AI automatically detects environment changes from narration. No manual commands needed!
+
+#### AI Environment Tags
+The AI can use special tags to set environment:
+```
+[WEATHER: heavy rain, intensity 2]
+[LIGHTING: darkness, source: no windows]
+[LOCATION: Dark Cave]
+[TIME: 3 hours pass]
+[TRAP: pit trap at entrance]
+[HAZARD: lava pool, 2d6 fire]
+```
+
+When you use `/do` and the AI mentions entering a cave, rain starting, or time passing, the environment auto-updates.
+
+#### Location Presets
+When entering known locations, presets apply automatically:
+- **Cave/Dungeon/Crypt**: Darkness, no weather
+- **Tavern/Inn/Temple**: Bright lighting from hearth/candles
+- **Forest/Swamp**: Dim lighting, difficult terrain
+- **Desert/Arctic**: Weather effects (heat/cold), time-based lighting
+
+#### Time Tracking
+The system tracks in-game time with time periods:
+- Dawn (6 AM), Morning (8 AM), Midday (12 PM), Afternoon (2 PM)
+- Evening (6 PM), Dusk (8 PM), Night (10 PM)
+
+Time affects outdoor lighting automatically!
+
+#### Time Commands
+```
+/time                          # View current time
+/time action:advance hours:4   # Advance 4 hours
+/time action:set period:night  # Set to night
+```
+
+#### Location Commands
+```
+/location                      # View current location
+/location location:cave        # Set to cave (applies preset)
+```
+
+#### Location Memory
+When you return to a location you've visited, the environment is restored:
+- Weather, lighting, terrain remembered per location
+- Changes you made persist (destroyed buildings, cleared traps)
+
 ### Environment Commands Quick Reference
 
 | Command | Description |
 |---------|-------------|
 | `/environment` | View full environment status |
+| `/time` | View or set in-game time |
+| `/location` | Set location with auto-presets |
 | `/trap action:create` | Create a trap |
 | `/trap action:list` | List all traps |
 | `/detecttrap` | Attempt to detect a trap |
@@ -1008,6 +1196,355 @@ Calculate cover between two positions:
 | `/hazard action:create` | Create environmental hazard |
 | `/terrain action:create` | Create terrain zone |
 | `/cover` | Calculate cover between positions |
+
+---
+
+## Travel & Random Encounters
+
+The travel system tracks party journeys between locations with distance, terrain, pace, and automatic encounter generation.
+
+### Intelligent Travel (Phase 14)
+
+The AI can automatically detect travel intent from your actions and narration:
+
+#### Natural Language Travel
+Just describe your intent to travel:
+```
+/do We head to Phandalin
+/do Let's journey to the mountains
+/do I want to travel to the tavern
+```
+
+The AI will narrate the journey and use structured tags to track progress:
+- `[TRAVEL: destination="Phandalin", distance=15, terrain=forest]` - Starts journey
+- `[ARRIVAL: "Phandalin"]` - Completes journey
+
+#### Location Discovery
+The AI discovers new locations during narration:
+```
+The innkeeper tells you about an abandoned mine in the hills...
+[LOCATION_DISCOVERED: name="Wave Echo Cave", terrain=hills, type=mine, poi=true]
+```
+
+Locations are automatically added to your world map with connections.
+
+### World Map Commands
+
+#### View World Map
+```
+/worldmap
+```
+Shows all discovered locations, connections, and distances.
+
+#### Fast Travel
+```
+/fasttravel destination:Phandalin
+```
+Instantly travel to a previously **visited** location. Fast travel:
+- Skips encounter rolls
+- Calculates time automatically
+- Only available for visited/explored locations
+
+#### Add Location Manually
+```
+/addlocation name:"Ruined Tower" terrain:hills location_type:ruins distance_from_current:20
+```
+
+#### Set Current Location
+```
+/setlocation location:"Phandalin"
+```
+
+#### View Location Details
+```
+/locationinfo location:"Wave Echo Cave"
+```
+
+### Location Discovery Status
+
+| Status | Description | Fast Travel |
+|--------|-------------|-------------|
+| Unknown | Just a name | ❌ No |
+| Heard Of | Rumors only | ❌ No |
+| Known | Know where it is | ❌ No |
+| Visited | Been there | ✅ Yes |
+| Explored | Fully explored | ✅ Yes |
+
+### Manual Travel Commands
+
+You can still use the original travel commands if you prefer more control:
+
+### Starting a Journey
+```
+/travel destination:Phandalin distance:30 terrain:road pace:normal origin:Neverwinter
+```
+
+**Parameters:**
+- `destination` - Where you're traveling to
+- `distance` - Distance in miles
+- `terrain` - Type of terrain (affects speed and encounters)
+- `pace` - Travel speed: slow, normal, or fast
+- `origin` - Where you're starting (defaults to current location)
+
+**Terrain Types:**
+| Terrain | Encounter Chance | Travel Speed |
+|---------|------------------|--------------|
+| Road | 10% | 1.0x |
+| Plains | 15% | 1.0x |
+| Forest | 25% | 0.75x |
+| Mountains | 30% | 0.5x |
+| Hills | 20% | 0.75x |
+| Swamp | 35% | 0.5x |
+| Desert | 20% | 0.75x |
+| Arctic | 25% | 0.5x |
+| Coastal | 15% | 1.0x |
+| Underground | 35% | 0.5x |
+| Jungle | 35% | 0.5x |
+| Ruins | 40% | 0.75x |
+
+**Travel Paces:**
+| Pace | Miles/Day | Effect |
+|------|-----------|--------|
+| Slow | 18 | Stealth possible |
+| Normal | 24 | Standard travel |
+| Fast | 30 | -5 to Passive Perception |
+
+### Checking Travel Status
+```
+/travelstatus
+```
+
+Shows progress:
+```
+🗺️ Travel Status
+Neverwinter → Phandalin
+
+Terrain: Road    Pace: Normal    Day: 1
+
+Progress: [████████░░] 80%
+24.0 / 30.0 miles
+
+Hours Today: 6.0/8    Remaining: 6.0 miles
+```
+
+### Advancing Travel
+```
+/traveladvance hours:4
+```
+
+Advances travel by the specified hours (1-8). Each hour:
+- Progress is calculated based on pace and terrain
+- Encounter check is made
+- If encounter occurs, it interrupts travel
+
+When arriving:
+```
+⏰ 2 hour(s) pass...
+Traveled: 6.0 miles
+
+🎉 Arrived at Phandalin!
+```
+The campaign location is automatically updated.
+
+### Canceling Travel
+```
+/travelcancel
+```
+
+Stops the current journey. The party remains in the wilderness at their current progress point.
+
+### Generating Random Encounters
+
+#### Combat Encounters
+```
+/randomencounter difficulty:medium terrain:forest
+```
+
+Generates a combat encounter scaled to your party:
+```
+⚔️ Goblin Ambush
+
+A band of goblins lies in wait among the trees...
+
+Difficulty: 🟠 Medium
+Terrain: Forest
+XP Reward: 400
+
+Enemies:
+• Goblin Boss (HP: 21, AC: 17)
+• Goblin (HP: 7, AC: 15)
+• Goblin (HP: 7, AC: 15)
+• Goblin (HP: 7, AC: 15)
+
+Use /combat to start combat with these enemies
+```
+
+**Difficulty Levels:**
+| Difficulty | Description |
+|------------|-------------|
+| Easy | A simple fight, minor resource expenditure |
+| Medium | Challenging but not deadly |
+| Hard | Very dangerous, some characters may drop |
+| Deadly | Potential for death, major resources needed |
+
+#### Non-Combat Encounters
+```
+/encounter event_type:social terrain:road
+```
+
+**Event Types:**
+- `social` - NPCs to interact with (merchants, travelers, patrols)
+- `discovery` - Something interesting to find (ruins, shrines, camps)
+- `weather` - Weather change event
+- `rest_site` - Shelter or safe resting spot
+- `random` - Random selection (re-rolls if combat)
+
+Example social encounter:
+```
+👥 Traveling Merchant
+
+A colorful wagon comes into view, pulled by a pair of mules. 
+The merchant waves as he approaches.
+
+Type: Social Encounter
+Terrain: Road
+
+Roleplay this encounter or use /do to interact
+```
+
+### Encounter Checks
+```
+/encountercheck hours:4 terrain:forest is_night:false stealthy:true
+```
+
+Manually roll for random encounters. Returns whether something happens and what type.
+
+### Monster Database
+
+The encounter system includes monsters from CR 0 to CR 10:
+
+**CR 0-1/4:** Bat, Rat, Spider, Commoner, Kobold
+**CR 1/4-1/2:** Goblin, Wolf, Skeleton, Orc, Hobgoblin
+**CR 1-2:** Bugbear, Ghoul, Giant Spider, Ogre, Ankheg
+**CR 3-5:** Owlbear, Werewolf, Troll, Hill Giant, Shambling Mound
+**CR 6-10:** Cyclops, Medusa, Stone Giant, Young Dragon, Aboleth
+
+### XP Thresholds (by Party Level)
+
+| Level | Easy | Medium | Hard | Deadly |
+|-------|------|--------|------|--------|
+| 1 | 25 | 50 | 75 | 100 |
+| 2 | 50 | 100 | 150 | 200 |
+| 3 | 75 | 150 | 225 | 400 |
+| 4 | 125 | 250 | 375 | 500 |
+| 5 | 250 | 500 | 750 | 1100 |
+| ... | ... | ... | ... | ... |
+
+### Travel Commands Quick Reference
+
+| Command | Description |
+|---------|-------------|
+| `/travel` | Start a journey between locations |
+| `/travelstatus` | View current travel progress |
+| `/traveladvance` | Advance travel by hours |
+| `/travelcancel` | Cancel current journey |
+| `/randomencounter` | Generate a combat encounter |
+| `/encounter` | Generate a non-combat encounter |
+| `/encountercheck` | Roll for random encounter |
+
+---
+
+## Session Management
+
+The bot automatically tracks session activity and provides seamless session continuity.
+
+### Session Tracking
+
+When you start a campaign with `/campaign`, the bot:
+- Tracks session duration and pacing phase
+- Counts actions, combats, and rests
+- Auto-saves every 5 minutes
+- Provides pacing hints to the AI
+
+### View Session Status
+```
+/session
+```
+Shows:
+- Current session duration
+- Pacing phase (Opening → Rising → Climax → Falling → Closing)
+- Action/combat/rest counts
+- Current pacing hints
+
+### Ending a Session
+```
+/session action:end
+```
+- Generates session summary with stats
+- Saves session for next time
+- TTS announces session complete
+
+### Pausing a Session
+```
+/session action:pause
+```
+- Pauses the session
+- Progress is saved automatically
+- Resume when players rejoin voice
+
+### Session Recap
+
+When returning to play:
+```
+/sessionrecap
+```
+The AI narrates what happened last session:
+- Previous session events
+- Current location and active quests
+- TTS plays the recap
+
+### Session History
+```
+/sessionhistory
+```
+View past session summaries (last 10 sessions):
+- Date and duration
+- Combat and action counts
+- Final location
+
+### Auto-Resume
+
+When players join a voice channel:
+1. Bot detects if they have an active campaign
+2. Sends resume prompt with last session info
+3. Offers recovery if available
+4. Auto-resumes paused session
+
+### Crash Recovery
+```
+/recover
+```
+If the bot crashes during play:
+- Recovery points are saved every 5 minutes
+- Use `/recover` to restore from last save
+- React ✅ to confirm restore
+
+### Session Pacing
+
+The AI receives pacing hints based on session length:
+
+| Phase | Duration | AI Guidance |
+|-------|----------|-------------|
+| Opening | 0-15 min | Set mood, let players orient |
+| Rising | 15-60 min | Introduce complications |
+| Climax | 60-90 min | Peak tension, dramatic moments |
+| Falling | 90-120 min | Start wrapping up |
+| Closing | 120+ min | Find good stopping point |
+
+The AI also suggests rests when:
+- 3+ combats without rest
+- 20+ actions without rest
+- 60+ minutes of play without rest
 
 ---
 
@@ -1310,10 +1847,18 @@ Bot: 🎯 Group Perception Check (DC 14)
      The party fails to notice the hooded figure watching from the shadows...
 ```
 
-### 6. Combat Encounter
+### 6. Combat Encounter (Automatic Trigger)
 ```
-DM: /fight 2 bandits
-Bot: ⚔️ COMBAT BEGINS!
+Player1: /do I draw my sword and attack the hooded figure
+Bot: 🔍 Attack intent detected: hooded figure
+
+AI: The hooded figure spins around, revealing the face of a scarred 
+    bandit! He whistles sharply, and a companion emerges from an alley!
+    "You shouldn't have done that..." [COMBAT: 2 bandits]
+
+Bot: ⚔️ COMBAT TRIGGERED!
+     Enemies detected: 2 Bandits (HP: 11 each, AC: 12)
+     
      Initiative Order:
      1. Elara (18)
      2. Bandit 1 (15)
@@ -1344,7 +1889,16 @@ Bot: ⚔️ Thorin swings his battleaxe! (Attack: 21 vs AC 12 - HIT!)
      🎉 Combat ends - processing rewards...
      
      XP Earned: 50 XP (25 each)
-     Loot: 12 gold, Rusty Shortsword
+     💰 Loot generated: 18 gold, Rusty Shortsword, Leather Armor
+     Use /claimloot to pick up items
+```
+
+### 6b. Combat Encounter (Manual Start)
+```
+DM: /fight bandit bandit
+Bot: ⚔️ COMBAT BEGINS!
+     Enemies: 2 Bandits (stats auto-loaded from database)
+     ...
 ```
 
 ### 7. Using Maps

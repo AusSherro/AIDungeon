@@ -265,6 +265,69 @@ OBJECTIVE_PATTERNS = [
 
 
 # =============================================================================
+# STRUCTURED TAG PATTERNS (Phase 13)
+# =============================================================================
+
+# [QUEST: name="Rescue the Princess", type=rescue, difficulty=hard, giver="King Aldric"]
+QUEST_TAG_PATTERN = re.compile(
+    r'\[QUEST:\s*([^\]]+)\]',
+    re.IGNORECASE
+)
+
+# [QUEST_COMPLETE: "Rescue the Princess"] or [QUEST_COMPLETE: quest_id]
+QUEST_COMPLETE_TAG_PATTERN = re.compile(
+    r'\[QUEST_COMPLETE:\s*["\']?([^"\'\]]+)["\']?\]',
+    re.IGNORECASE
+)
+
+# [QUEST_PROGRESS: "Rescue the Princess", objective=1] or objective="Find the tower"
+QUEST_PROGRESS_TAG_PATTERN = re.compile(
+    r'\[QUEST_PROGRESS:\s*([^\]]+)\]',
+    re.IGNORECASE
+)
+
+# [RUMOR: "Strange lights have been seen near the old cemetery"]
+RUMOR_TAG_PATTERN = re.compile(
+    r'\[RUMOR:\s*["\']?([^"\'\]]+)["\']?\]',
+    re.IGNORECASE
+)
+
+# [QUEST_HOOK: name="The Missing Merchant", description="A merchant went missing on the road"]
+QUEST_HOOK_TAG_PATTERN = re.compile(
+    r'\[QUEST_HOOK:\s*([^\]]+)\]',
+    re.IGNORECASE
+)
+
+# [OBJECTIVE: "Find the hidden entrance"] - add to current quest
+OBJECTIVE_TAG_PATTERN = re.compile(
+    r'\[OBJECTIVE:\s*["\']?([^"\'\]]+)["\']?\]',
+    re.IGNORECASE
+)
+
+# [QUEST_CHAIN: parent="Main Quest", child="Side Quest"]
+QUEST_CHAIN_TAG_PATTERN = re.compile(
+    r'\[QUEST_CHAIN:\s*([^\]]+)\]',
+    re.IGNORECASE
+)
+
+# Natural language quest offer patterns (improved)
+QUEST_OFFER_PATTERNS = [
+    # Direct requests for help
+    r"(?:please|i beg you|you must).*(?:help|save|rescue|find|retrieve|stop|defeat)",
+    r"(?:will you|would you|can you|could you).*(?:help|save|rescue|find|retrieve|deliver)",
+    # Reward mentions
+    r"(?:reward|payment|gold|coin|treasure).*(?:if you|for your|upon completion|when you)",
+    r"(?:i('ll| will)|we('ll| will)).*(?:pay|reward|compensate).*(?:handsomely|well|generously)",
+    # Quest assignment
+    r"(?:offers?|gives?|assigns?|presents?).*(?:quest|mission|task|job)",
+    r"(?:your (?:new )?(?:quest|mission|task|objective)).*(?:is|will be)",
+    # Need/seek patterns
+    r"(?:we need|i need|the (?:village|town|kingdom) needs?).*(?:heroes?|adventurers?|someone)",
+    r"(?:seeking|looking for).*(?:brave|capable|skilled).*(?:adventurers?|heroes?)",
+]
+
+
+# =============================================================================
 # QUEST PERSISTENCE
 # =============================================================================
 
@@ -338,7 +401,8 @@ def create_quest(
     giver_npc: str = "",
     objectives: List[str] = None,
     rewards: QuestReward = None,
-    status: str = "active"
+    status: str = "active",
+    tags: List[str] = None
 ) -> Quest:
     """
     Create a new quest.
@@ -353,6 +417,7 @@ def create_quest(
         objectives: List of objective descriptions (creates simple objectives)
         rewards: Quest rewards
         status: Initial status (active, available)
+        tags: List of tags for categorization
     
     Returns:
         The created Quest
@@ -397,7 +462,8 @@ def create_quest(
         difficulty=difficulty,
         giver_npc=giver_npc,
         objectives=quest_objectives,
-        rewards=rewards.to_dict() if isinstance(rewards, QuestReward) else rewards
+        rewards=rewards.to_dict() if isinstance(rewards, QuestReward) else rewards,
+        tags=tags or []
     )
     
     quests.append(quest)
@@ -730,6 +796,339 @@ def detect_new_quest(narration: str) -> Optional[Dict[str, str]]:
 
 
 # =============================================================================
+# STRUCTURED TAG DETECTION (Phase 13)
+# =============================================================================
+
+def parse_quest_tag_attributes(attr_string: str) -> Dict[str, str]:
+    """
+    Parse attributes from a quest tag string.
+    
+    Examples:
+        'name="Rescue the Princess", type=rescue, difficulty=hard'
+        -> {"name": "Rescue the Princess", "type": "rescue", "difficulty": "hard"}
+    """
+    result = {}
+    
+    # Match key="value" or key='value' or key=value patterns
+    # Handle quoted values first
+    quoted_pattern = r'(\w+)\s*=\s*["\']([^"\']+)["\']'
+    for match in re.finditer(quoted_pattern, attr_string):
+        result[match.group(1).lower()] = match.group(2)
+    
+    # Then handle unquoted values (avoiding already-matched parts)
+    remaining = re.sub(quoted_pattern, '', attr_string)
+    unquoted_pattern = r'(\w+)\s*=\s*(\w+)'
+    for match in re.finditer(unquoted_pattern, remaining):
+        key = match.group(1).lower()
+        if key not in result:
+            result[key] = match.group(2)
+    
+    return result
+
+
+def detect_structured_quest_tags(narration: str) -> Dict[str, Any]:
+    """
+    Detect structured quest-related tags in AI narration.
+    
+    Returns dict with keys: new_quests, completions, progress, rumors, hooks, objectives, chains
+    """
+    result = {
+        "new_quests": [],
+        "completions": [],
+        "progress": [],
+        "rumors": [],
+        "hooks": [],
+        "objectives": [],
+        "chains": []
+    }
+    
+    # [QUEST: name="...", type=..., difficulty=..., giver="..."]
+    for match in QUEST_TAG_PATTERN.finditer(narration):
+        attrs = parse_quest_tag_attributes(match.group(1))
+        if "name" in attrs:
+            quest_data = {
+                "name": attrs.get("name", "Unknown Quest"),
+                "description": attrs.get("description", attrs.get("desc", "")),
+                "type": attrs.get("type", "side"),
+                "difficulty": attrs.get("difficulty", "medium"),
+                "giver": attrs.get("giver", attrs.get("npc", "")),
+                "location": attrs.get("location", ""),
+                "objectives": [],
+            }
+            # Parse objectives if provided
+            if "objectives" in attrs:
+                quest_data["objectives"] = [o.strip() for o in attrs["objectives"].split("|")]
+            result["new_quests"].append(quest_data)
+    
+    # [QUEST_COMPLETE: "Quest Name"]
+    for match in QUEST_COMPLETE_TAG_PATTERN.finditer(narration):
+        result["completions"].append(match.group(1).strip())
+    
+    # [QUEST_PROGRESS: "Quest Name", objective=1]
+    for match in QUEST_PROGRESS_TAG_PATTERN.finditer(narration):
+        attrs = parse_quest_tag_attributes(match.group(1))
+        quest_ref = match.group(1).split(",")[0].strip().strip("\"'")
+        result["progress"].append({
+            "quest": quest_ref,
+            "objective": attrs.get("objective", "1"),
+            "amount": int(attrs.get("amount", "1"))
+        })
+    
+    # [RUMOR: "Strange lights near the cemetery"]
+    for match in RUMOR_TAG_PATTERN.finditer(narration):
+        result["rumors"].append(match.group(1).strip())
+    
+    # [QUEST_HOOK: name="...", description="..."]
+    for match in QUEST_HOOK_TAG_PATTERN.finditer(narration):
+        attrs = parse_quest_tag_attributes(match.group(1))
+        if attrs:
+            result["hooks"].append({
+                "name": attrs.get("name", "Unknown"),
+                "description": attrs.get("description", attrs.get("desc", "")),
+                "type": attrs.get("type", "side"),
+                "difficulty": attrs.get("difficulty", "medium"),
+            })
+    
+    # [OBJECTIVE: "New objective text"]
+    for match in OBJECTIVE_TAG_PATTERN.finditer(narration):
+        result["objectives"].append(match.group(1).strip())
+    
+    # [QUEST_CHAIN: parent="Main Quest", child="Side Quest"]
+    for match in QUEST_CHAIN_TAG_PATTERN.finditer(narration):
+        attrs = parse_quest_tag_attributes(match.group(1))
+        if "parent" in attrs and "child" in attrs:
+            result["chains"].append({
+                "parent": attrs["parent"],
+                "child": attrs["child"]
+            })
+    
+    return result
+
+
+def detect_natural_language_quest_offer(narration: str) -> Optional[Dict[str, Any]]:
+    """
+    Detect quest offers from natural language patterns.
+    
+    Returns quest data if a clear offer is detected, None otherwise.
+    """
+    narration_lower = narration.lower()
+    
+    # Check for quest offer patterns
+    offer_detected = False
+    for pattern in QUEST_OFFER_PATTERNS:
+        if re.search(pattern, narration_lower):
+            offer_detected = True
+            break
+    
+    if not offer_detected:
+        return None
+    
+    # Try to extract quest details from the narration
+    quest_data = {
+        "detected": True,
+        "type": "side",
+        "difficulty": "medium",
+        "excerpt": narration[:300]
+    }
+    
+    # Detect quest type from keywords
+    type_keywords = {
+        "rescue": ["rescue", "save", "free", "liberate", "captive", "prisoner", "kidnap"],
+        "fetch": ["retrieve", "find", "bring", "fetch", "recover", "lost", "stolen"],
+        "bounty": ["kill", "defeat", "slay", "eliminate", "hunt", "bounty"],
+        "escort": ["escort", "protect", "guard", "accompany", "deliver safely"],
+        "explore": ["explore", "discover", "map", "investigate location", "find the way"],
+        "mystery": ["investigate", "solve", "mystery", "truth", "uncover", "discover what"],
+    }
+    
+    for quest_type, keywords in type_keywords.items():
+        if any(kw in narration_lower for kw in keywords):
+            quest_data["type"] = quest_type
+            break
+    
+    # Try to detect difficulty from context
+    if any(w in narration_lower for w in ["dangerous", "deadly", "dragon", "powerful", "ancient evil"]):
+        quest_data["difficulty"] = "hard"
+    elif any(w in narration_lower for w in ["simple", "easy", "quick", "small favor"]):
+        quest_data["difficulty"] = "easy"
+    
+    # Try to extract NPC name (look for quoted speech attribution)
+    giver_match = re.search(r'\*\*([A-Z][a-zA-Z\s]+)\*\*', narration)
+    if giver_match:
+        quest_data["giver"] = giver_match.group(1).strip()
+    
+    return quest_data
+
+
+# =============================================================================
+# RUMOR SYSTEM (Phase 13)
+# =============================================================================
+
+def _get_rumors_path(channel_id: str) -> str:
+    """Get the file path for a channel's rumors data."""
+    return os.path.join(QUEST_DIR, f'{channel_id}_rumors.json')
+
+
+def load_rumors(channel_id: str) -> List[Dict[str, Any]]:
+    """Load all rumors for a channel."""
+    path = _get_rumors_path(channel_id)
+    if not os.path.exists(path):
+        return []
+    
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Error loading rumors for {channel_id}: {e}")
+        return []
+
+
+def save_rumors(channel_id: str, rumors: List[Dict[str, Any]]):
+    """Save all rumors for a channel."""
+    path = _get_rumors_path(channel_id)
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(rumors, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Error saving rumors for {channel_id}: {e}")
+
+
+def add_rumor(channel_id: str, rumor_text: str, source: str = "") -> Dict[str, Any]:
+    """Add a new rumor to the channel's rumor list."""
+    rumors = load_rumors(channel_id)
+    
+    rumor = {
+        "id": f"rumor_{len(rumors) + 1}",
+        "text": rumor_text,
+        "source": source,
+        "heard_at": datetime.now().isoformat(),
+        "investigated": False,
+        "led_to_quest": ""
+    }
+    
+    # Avoid duplicate rumors
+    if not any(r["text"].lower() == rumor_text.lower() for r in rumors):
+        rumors.append(rumor)
+        save_rumors(channel_id, rumors)
+        return rumor
+    
+    return None
+
+
+def get_uninvestigated_rumors(channel_id: str) -> List[Dict[str, Any]]:
+    """Get all rumors that haven't been investigated yet."""
+    rumors = load_rumors(channel_id)
+    return [r for r in rumors if not r.get("investigated", False)]
+
+
+def convert_rumor_to_quest(
+    channel_id: str, 
+    rumor_id: str, 
+    quest_name: str,
+    description: str,
+    quest_type: str = "side",
+    difficulty: str = "medium"
+) -> Optional[Quest]:
+    """Convert an investigated rumor into an active quest."""
+    rumors = load_rumors(channel_id)
+    
+    rumor = None
+    for r in rumors:
+        if r["id"] == rumor_id:
+            rumor = r
+            break
+    
+    if not rumor:
+        return None
+    
+    # Create the quest
+    quest = create_quest(
+        channel_id=channel_id,
+        name=quest_name,
+        description=description,
+        quest_type=quest_type,
+        difficulty=difficulty,
+        objectives=["Investigate the rumor", "Complete the task"],
+        tags=["from_rumor", rumor_id]
+    )
+    
+    if quest:
+        # Mark rumor as investigated
+        rumor["investigated"] = True
+        rumor["led_to_quest"] = quest.id
+        save_rumors(channel_id, rumors)
+    
+    return quest
+
+
+# =============================================================================
+# QUEST CHAIN SYSTEM (Phase 13)
+# =============================================================================
+
+def link_quests(channel_id: str, parent_quest_id: str, child_quest_id: str) -> bool:
+    """
+    Link two quests in a chain. Child quest unlocks when parent completes.
+    """
+    parent = get_quest(channel_id, parent_quest_id)
+    child = get_quest(channel_id, child_quest_id)
+    
+    if not parent or not child:
+        return False
+    
+    # Add chain info to both quests
+    if "chain_next" not in parent.tags:
+        parent.tags.append(f"chain_next:{child_quest_id}")
+    
+    if "chain_prev" not in child.tags:
+        child.tags.append(f"chain_prev:{parent_quest_id}")
+    
+    # Save
+    quests = load_quests(channel_id)
+    for i, q in enumerate(quests):
+        if q.id == parent.id:
+            quests[i] = parent
+        elif q.id == child.id:
+            quests[i] = child
+    save_quests(channel_id, quests)
+    
+    return True
+
+
+def get_next_quest_in_chain(channel_id: str, quest_id: str) -> Optional[Quest]:
+    """Get the next quest in a chain after the given quest."""
+    quest = get_quest(channel_id, quest_id)
+    if not quest:
+        return None
+    
+    for tag in quest.tags:
+        if tag.startswith("chain_next:"):
+            next_id = tag.replace("chain_next:", "")
+            return get_quest(channel_id, next_id)
+    
+    return None
+
+
+def activate_chain_quest(channel_id: str, completed_quest_id: str) -> Optional[Quest]:
+    """
+    When a quest completes, check if it has a chained quest to activate.
+    Returns the newly activated quest or None.
+    """
+    next_quest = get_next_quest_in_chain(channel_id, completed_quest_id)
+    
+    if next_quest and next_quest.status == "available":
+        next_quest.status = "active"
+        quests = load_quests(channel_id)
+        for i, q in enumerate(quests):
+            if q.id == next_quest.id:
+                quests[i] = next_quest
+                break
+        save_quests(channel_id, quests)
+        return next_quest
+    
+    return None
+
+
+# =============================================================================
 # QUEST LOG FORMATTING
 # =============================================================================
 
@@ -913,16 +1312,146 @@ def get_quest_context_for_ai(channel_id: str) -> str:
     return "\n".join(lines)
 
 
-def process_narration_for_quests(channel_id: str, narration: str) -> List[Dict[str, Any]]:
+def process_narration_for_quests(channel_id: str, narration: str, source_npc: str = "") -> List[Dict[str, Any]]:
     """
     Main entry point: Process AI narration for quest progress.
+    
+    Phase 13 Enhanced: Now detects structured tags AND natural language.
     
     Returns:
         List of events that occurred: [{"type": str, "quest": Quest, "message": str}]
     """
     events = []
     
-    # Detect quest progress
+    # =========================================================================
+    # PHASE 13: Detect structured quest tags first (highest priority)
+    # =========================================================================
+    
+    tag_results = detect_structured_quest_tags(narration)
+    
+    # Process new quests from [QUEST:] tags
+    for quest_data in tag_results["new_quests"]:
+        # Check if quest already exists
+        existing = get_quest_by_name(channel_id, quest_data["name"])
+        if not existing:
+            # Create new quest from tag
+            quest = create_quest(
+                channel_id=channel_id,
+                name=quest_data["name"],
+                description=quest_data.get("description", f"Quest from {quest_data.get('giver', 'unknown')}"),
+                quest_type=quest_data.get("type", "side"),
+                difficulty=quest_data.get("difficulty", "medium"),
+                giver_npc=quest_data.get("giver", source_npc),
+                objectives=quest_data.get("objectives", []),
+                tags=["auto_created"]
+            )
+            if quest:
+                events.append({
+                    "type": "quest_created",
+                    "quest": quest,
+                    "message": f"📜 **New Quest:** {quest.name}\n*{quest.description}*"
+                })
+    
+    # Process quest completions from [QUEST_COMPLETE:] tags
+    for quest_name in tag_results["completions"]:
+        quest = get_quest_by_name(channel_id, quest_name)
+        if quest and quest.status == "active":
+            success, rewards, msg = complete_quest(channel_id, quest.id)
+            if success:
+                events.append({
+                    "type": "quest_complete",
+                    "quest": quest,
+                    "rewards": rewards,
+                    "message": msg
+                })
+                # Check for chain quest
+                chain_quest = activate_chain_quest(channel_id, quest.id)
+                if chain_quest:
+                    events.append({
+                        "type": "quest_unlocked",
+                        "quest": chain_quest,
+                        "message": f"🔓 **Quest Unlocked:** {chain_quest.name}"
+                    })
+    
+    # Process objective progress from [QUEST_PROGRESS:] tags
+    for progress_data in tag_results["progress"]:
+        quest = get_quest_by_name(channel_id, progress_data["quest"])
+        if quest:
+            obj_idx = int(progress_data.get("objective", "1")) - 1
+            objectives = quest.get_objectives()
+            if 0 <= obj_idx < len(objectives):
+                obj = objectives[obj_idx]
+                amount = progress_data.get("amount", 1)
+                success, msg = update_objective_progress(
+                    channel_id, quest.id, obj.id, 
+                    obj.progress + amount
+                )
+                if success:
+                    events.append({
+                        "type": "objective_progress",
+                        "quest": quest,
+                        "message": msg
+                    })
+    
+    # Process rumors from [RUMOR:] tags
+    for rumor_text in tag_results["rumors"]:
+        rumor = add_rumor(channel_id, rumor_text, source=source_npc)
+        if rumor:
+            events.append({
+                "type": "rumor_heard",
+                "rumor": rumor,
+                "message": f"👂 **Rumor heard:** *\"{rumor_text}\"*"
+            })
+    
+    # Process quest hooks from [QUEST_HOOK:] tags (create as available quests)
+    for hook_data in tag_results["hooks"]:
+        existing = get_quest_by_name(channel_id, hook_data["name"])
+        if not existing:
+            quest = create_quest(
+                channel_id=channel_id,
+                name=hook_data["name"],
+                description=hook_data.get("description", ""),
+                quest_type=hook_data.get("type", "side"),
+                difficulty=hook_data.get("difficulty", "medium"),
+                status="available",  # Not active yet
+                tags=["quest_hook"]
+            )
+            if quest:
+                events.append({
+                    "type": "quest_hook",
+                    "quest": quest,
+                    "message": f"📌 **Quest Available:** {quest.name}"
+                })
+    
+    # Process new objectives from [OBJECTIVE:] tags
+    for obj_text in tag_results["objectives"]:
+        # Find active quest to add objective to
+        active = get_active_quests(channel_id)
+        if active:
+            quest = active[0]  # Add to first active quest
+            success, msg = add_objective(channel_id, quest.id, obj_text)
+            if success:
+                events.append({
+                    "type": "objective_added",
+                    "quest": quest,
+                    "message": f"📋 **New Objective:** {obj_text}"
+                })
+    
+    # Process quest chains from [QUEST_CHAIN:] tags
+    for chain_data in tag_results["chains"]:
+        parent = get_quest_by_name(channel_id, chain_data["parent"])
+        child = get_quest_by_name(channel_id, chain_data["child"])
+        if parent and child:
+            link_quests(channel_id, parent.id, child.id)
+            events.append({
+                "type": "quest_chain",
+                "message": f"🔗 Quests linked: {parent.name} → {child.name}"
+            })
+    
+    # =========================================================================
+    # EXISTING: Natural language quest progress detection
+    # =========================================================================
+    
     progress = detect_quest_progress(channel_id, narration)
     
     for item in progress:
@@ -950,6 +1479,14 @@ def process_narration_for_quests(channel_id: str, narration: str) -> List[Dict[s
                             "rewards": rewards,
                             "message": msg
                         })
+                        # Check for chain quest
+                        chain_quest = activate_chain_quest(channel_id, quest.id)
+                        if chain_quest:
+                            events.append({
+                                "type": "quest_unlocked",
+                                "quest": chain_quest,
+                                "message": f"🔓 **Quest Unlocked:** {chain_quest.name}"
+                            })
         
         elif item["type"] == "quest_complete":
             quest = item["quest"]
@@ -961,6 +1498,14 @@ def process_narration_for_quests(channel_id: str, narration: str) -> List[Dict[s
                     "rewards": rewards,
                     "message": msg
                 })
+                # Check for chain quest
+                chain_quest = activate_chain_quest(channel_id, quest.id)
+                if chain_quest:
+                    events.append({
+                        "type": "quest_unlocked",
+                        "quest": chain_quest,
+                        "message": f"🔓 **Quest Unlocked:** {chain_quest.name}"
+                    })
         
         elif item["type"] == "quest_failed":
             quest = item["quest"]
@@ -970,6 +1515,20 @@ def process_narration_for_quests(channel_id: str, narration: str) -> List[Dict[s
                     "quest": quest,
                     "message": f"❌ Quest Failed: **{quest.name}**"
                 })
+    
+    # =========================================================================
+    # PHASE 13: Natural language quest offer detection (fallback)
+    # =========================================================================
+    
+    # Only trigger if no structured quest tags were found
+    if not tag_results["new_quests"] and not tag_results["hooks"]:
+        quest_offer = detect_natural_language_quest_offer(narration)
+        if quest_offer:
+            events.append({
+                "type": "quest_offer_detected",
+                "data": quest_offer,
+                "message": f"💡 *A quest may have been offered. Use `/quest create` to add it, or the AI can use structured tags.*"
+            })
     
     return events
 
@@ -1060,3 +1619,4 @@ def add_note_to_quest(channel_id: str, quest_id: str, note: str) -> bool:
     quest.notes.append(f"[{datetime.now().strftime('%Y-%m-%d')}] {note}")
     update_quest(channel_id, quest)
     return True
+

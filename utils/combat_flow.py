@@ -831,17 +831,75 @@ def process_post_combat(
                 f"🎉 **Level Up!** {', '.join(result.level_ups)}"
             )
     
-    # Generate loot from toughest enemy
+    # ==== PHASE 11: Enhanced Loot Generation ====
+    # Generate loot from ALL defeated enemies using the new system
     if end_result.defeated_enemies:
-        toughest = max(
-            end_result.defeated_enemies,
-            key=lambda e: e.get('xp', 0)
-        )
-        cr = int(str(toughest.get('cr', '1')).split('/')[0]) if toughest.get('cr') else 1
-        result.loot = generate_enemy_loot(toughest['name'], cr)
-        
-        if result.loot:
-            result.summary_lines.append("💰 **Loot Found!**")
+        try:
+            from utils.combat_trigger import generate_loot_for_enemies, format_post_combat_loot
+            from utils.inventory_manager import create_loot_distribution, add_unidentified_item
+            
+            # Generate loot based on all defeated enemies
+            loot = generate_loot_for_enemies(
+                end_result.defeated_enemies,
+                party_size=len(player_ids) if player_ids else 1
+            )
+            
+            # Create a claimable loot pile
+            loot_items = loot.get('items', [])
+            magic_items = loot.get('magic_items', [])
+            gold = loot.get('gold', 0)
+            
+            # Add unidentified magic items
+            unidentified_items = []
+            for magic_item in magic_items:
+                if not magic_item.get('identified', True):
+                    # Add as unidentified
+                    unidentified_items.append({
+                        'display_name': f"Mysterious {magic_item.get('rarity', 'magic')} item",
+                        'true_name': magic_item['name'],
+                        'rarity': magic_item.get('rarity', 'common')
+                    })
+                else:
+                    loot_items.append(magic_item['name'])
+            
+            # Create the loot distribution for claiming
+            if loot_items or gold > 0 or unidentified_items:
+                create_loot_distribution(
+                    channel_id,
+                    items=loot_items,
+                    gold=gold,
+                    source=f"Defeated {len(end_result.defeated_enemies)} enemies"
+                )
+                
+                result.loot = {
+                    'gold': gold,
+                    'items': loot_items,
+                    'magic_items': unidentified_items
+                }
+                
+                # Build loot summary
+                result.summary_lines.append("\n💰 **LOOT FOUND!**")
+                if gold > 0:
+                    result.summary_lines.append(f"  • **Gold:** {gold} gp")
+                if loot_items:
+                    result.summary_lines.append(f"  • **Items:** {', '.join(loot_items)}")
+                if unidentified_items:
+                    result.summary_lines.append(f"  • **Magic Items:** {len(unidentified_items)} unidentified ✨")
+                    result.summary_lines.append("    *Use `/identify <item>` to identify magic items*")
+                
+                result.summary_lines.append("*Use `/claimloot <item>` to claim, `/splitgold` to divide gold.*")
+        except Exception as e:
+            # Fallback to old loot system
+            print(f"Phase 11 loot generation error: {e}")
+            toughest = max(
+                end_result.defeated_enemies,
+                key=lambda e: e.get('xp', 0)
+            )
+            cr = int(str(toughest.get('cr', '1')).split('/')[0]) if toughest.get('cr') else 1
+            result.loot = generate_enemy_loot(toughest['name'], cr)
+            
+            if result.loot:
+                result.summary_lines.append("💰 **Loot Found!**")
     
     # Short rest option
     if result.can_short_rest:
