@@ -8,17 +8,19 @@
 2. [Setting Up a Campaign](#setting-up-a-campaign)
 3. [Creating Characters](#creating-characters)
 4. [Gameplay Commands](#gameplay-commands)
-5. [Combat System](#combat-system)
-6. [Combat Reactions](#combat-reactions)
-7. [XP & Leveling](#xp--leveling)
-8. [Loot & Treasure](#loot--treasure)
-9. [Spellcasting](#spellcasting)
-10. [Rest & Recovery](#rest--recovery)
-11. [DM Tools](#dm-tools)
-12. [Tactical Maps](#tactical-maps)
-13. [Player Handouts](#player-handouts)
-14. [Voice & Ambient](#voice--ambient)
-15. [Example Session](#example-session)
+5. [Skill Checks](#skill-checks)
+6. [Combat System](#combat-system)
+7. [Combat Turn Timer](#combat-turn-timer)
+8. [Combat Reactions](#combat-reactions)
+9. [XP & Leveling](#xp--leveling)
+10. [Loot & Treasure](#loot--treasure)
+11. [Spellcasting](#spellcasting)
+12. [Rest & Recovery](#rest--recovery)
+13. [DM Tools](#dm-tools)
+14. [Tactical Maps](#tactical-maps)
+15. [Player Handouts](#player-handouts)
+16. [Voice & Ambient](#voice--ambient)
+17. [Example Session](#example-session)
 
 ---
 
@@ -132,6 +134,72 @@ Passes to the next player in turn order.
 
 ---
 
+## Skill Checks
+
+The AI DM automatically detects when skill checks are needed and prompts players with interactive buttons.
+
+### How It Works
+
+1. **You take an action**: `/do I try to pick the lock`
+2. **AI requests a check**: "The lock looks complex. Roll Sleight of Hand, DC 15."
+3. **Button appears**: Click 🎲 **Roll** to make your check
+4. **AI narrates outcome**: Success or failure is dramatically described
+
+### Automatic Detection
+
+The bot detects these patterns from AI narration:
+- "Roll Perception" / "Make a Stealth check"
+- "Roll Strength" / "Make a Constitution check"
+- "Dexterity saving throw" / "Wisdom save, DC 14"
+- "Everyone roll" / "The party must make"
+
+### Advantage & Disadvantage
+
+Advantage/disadvantage is **automatically applied** based on your conditions:
+- **Advantage**: Invisible (attacking), target Blinded/Prone/Restrained
+- **Disadvantage**: Blinded, Frightened, Poisoned, Prone, Restrained
+
+### Group Checks (DM Command)
+```
+/groupcheck <skill> [dc]
+```
+Example: `/groupcheck stealth 14`
+
+All players get prompted to roll. Uses **majority rule** - if more than half succeed, the group succeeds.
+
+### Saving Throws (DM Command)
+```
+/savingthrow <ability> <dc> [player]
+```
+Examples:
+- `/savingthrow dexterity 15` - All players roll DEX save
+- `/savingthrow wisdom 13 @Thorin` - Only Thorin rolls
+
+### Passive Perception (DM Command)
+```
+/passivecheck <dc> <description>
+```
+Example: `/passivecheck 14 a hidden tripwire`
+
+Secretly checks all players' passive Perception. Only those who succeed are notified that they notice something.
+
+### Passive Score Calculation
+
+```
+Passive Score = 10 + Skill Modifier + Bonuses
+```
+
+Bonuses include:
+- **Observant feat**: +5 to passive Perception and Investigation
+- **Advantage conditions**: +5
+- **Disadvantage conditions**: -5
+
+### Timeout & Auto-Roll
+
+If you don't click the roll button within **60 seconds**, the system auto-rolls for you. This keeps the game moving!
+
+---
+
 ## Combat System
 
 ### Start Combat
@@ -167,6 +235,64 @@ Moves to the next combatant in initiative order.
 /endcombat
 ```
 Ends the encounter, automatically awards XP to the party, and generates loot from defeated enemies.
+
+---
+
+## Combat Turn Timer
+
+Combat turns are timed to keep the action moving. Players have a set amount of time to act before their turn auto-passes.
+
+### How It Works
+
+1. **Turn starts**: You're pinged with "It's your turn!"
+2. **Timer runs**: Default 60 seconds to take your action
+3. **Warning ping**: At 30 seconds, you get a reminder
+4. **Auto-pass**: If time runs out, you take the Dodge action
+
+### Configure Timer (DM)
+```
+/turntimer timeout:<seconds> [warning:<seconds>] [enabled:<true/false>]
+```
+Examples:
+- `/turntimer timeout:90` - Set 90-second turns
+- `/turntimer timeout:60 warning:20` - Warn at 20 seconds left
+- `/turntimer enabled:false` - Disable timer entirely
+
+### Check Remaining Time
+```
+/timeleft
+```
+Shows how much time you have left on your current turn.
+
+### Turn Announcements
+
+When your turn starts, you see:
+- Your current HP and conditions
+- Available actions (Action, Bonus Action, Reaction, Movement)
+- Quick suggestions based on your character state
+- Enemies in range
+
+### End-of-Turn Effects
+
+The bot automatically processes:
+- **Condition durations**: Frightened (1 round left), etc.
+- **Ongoing damage**: Poison, fire, bleed effects
+- **Regeneration**: Trolls and other regenerating creatures
+- **Recharge abilities**: Dragon breath weapons, etc.
+- **Concentration checks**: Prompted when you take damage
+
+### Combat End Detection
+
+Combat automatically ends when:
+- ✅ **Victory**: All enemies defeated
+- 💀 **TPK**: All players down
+- 🏃 **Fled**: All enemies fled
+- 🏳️ **Surrender**: Enemies surrendered
+
+Post-combat, you get:
+- XP calculation and distribution
+- Loot generation from defeated enemies
+- Short rest opportunity offer
 
 ---
 
@@ -591,7 +717,32 @@ Bot: The barkeep leans in conspiratorially...
      "Aye, there's been trouble at the old lighthouse..."
 ```
 
-### 5. Combat Encounter
+### 5. Skill Checks
+```
+Player1: /do I try to read the barkeep's expression to see if he's hiding something
+Bot: 🔍 Make an Insight check, DC 12.
+     [🎲 Roll] button appears
+
+Player1: *clicks Roll button*
+Bot: 🎲 Thorin rolls Insight: 15 (d20: 12 + 3) vs DC 12 - SUCCESS!
+     
+     The barkeep's eyes flicker briefly toward the cellar door. 
+     There's more to this story than he's telling...
+
+DM: /groupcheck perception 14
+Bot: 🎯 Group Perception Check (DC 14)
+     Everyone, roll Perception!
+     [🎲 Roll] buttons appear for all players
+
+     Results:
+     ✅ Thorin: 16 - Success!
+     ❌ Elara: 11 - Failure
+     
+     Group Result: FAILURE (need majority)
+     The party fails to notice the hooded figure watching from the shadows...
+```
+
+### 6. Combat Encounter
 ```
 DM: /fight 2 bandits
 Bot: ⚔️ COMBAT BEGINS!
@@ -600,19 +751,35 @@ Bot: ⚔️ COMBAT BEGINS!
      2. Bandit 1 (15)
      3. Thorin (12)
      4. Bandit 2 (8)
+     
+     ⏱️ Elara, it's your turn! (60 seconds)
+     HP: 18/18 | AC: 12 | No conditions
+     Available: Action, Bonus Action, Movement (30 ft)
 
 Player2: /cast fire bolt bandit1
 Bot: 🔥 Elara hurls a bolt of fire! (Attack: 17 vs AC 12 - HIT!)
      Damage: 8 fire damage! Bandit 1 staggers back, singed.
 
-Bot: Bandit 1's turn... (AI narrates enemy action)
+Bot: 🗡️ Bandit 1's turn...
+     The bandit lunges at Elara with a rusted shortsword!
+     Attack: 14 vs AC 12 - HIT! 5 slashing damage.
+     Elara HP: 13/18
+     
+     ⏱️ Thorin, it's your turn! (60 seconds)
+     HP: 30/30 | AC: 16 | No conditions
 
 Player1: /attack bandit1
 Bot: ⚔️ Thorin swings his battleaxe! (Attack: 21 vs AC 12 - HIT!)
      Damage: 11 slashing! Bandit 1 falls!
+     
+     ✅ Victory detected! All enemies defeated.
+     🎉 Combat ends - processing rewards...
+     
+     XP Earned: 50 XP (25 each)
+     Loot: 12 gold, Rusty Shortsword
 ```
 
-### 6. Using Maps
+### 7. Using Maps
 ```
 DM: /newmap lighthouse_fight 10 8 dungeon
 DM: /addtoken Thorin 2 4 T blue
@@ -638,7 +805,7 @@ Player1: /distance Thorin Bandit1
 Bot: 📏 Distance: 25 feet (5 squares)
 ```
 
-### 7. Rest and Recovery
+### 8. Rest and Recovery
 ```
 Player1: /rest short
 Bot: ⏰ Thorin takes a short rest (1 hour)
@@ -651,7 +818,7 @@ Bot: 🌙 Elara takes a long rest (8 hours)
      Spell slots restored: 1st: 2/2
 ```
 
-### 8. Handouts
+### 9. Handouts
 ```
 DM: /handout "Torn Page" "...the artifact lies beneath the old well..." clue @Player1
 Bot: 📜 Handout created! Shared with Thorin.
@@ -691,6 +858,12 @@ Bot: 📜 TORN PAGE (Clue)
 | `/attack` | Attack target |
 | `/reaction` | Use reaction (Shield, Counterspell, etc.) |
 | `/cast` | Cast a spell |
+| `/nextturn` | Advance to next turn |
+| `/turntimer` | Configure turn timer (DM) |
+| `/timeleft` | Check remaining turn time |
+| `/groupcheck` | Request group skill check (DM) |
+| `/savingthrow` | Request saving throw (DM) |
+| `/passivecheck` | Secret passive perception check (DM) |
 | `/rest` | Short/long rest |
 | `/xp` | View XP progress |
 | `/party` | View party dashboard |
