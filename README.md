@@ -60,6 +60,7 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 | `/deathsave` | Roll death saving throw |
 | `/levelup` | Level up your character |
 | `/xp [amount]` | View or award XP |
+| `/resources` | View spell slots, class resources, consumables |
 
 ### Party & XP
 | Command | Description |
@@ -199,6 +200,54 @@ Combat reactions are tracked and can be used strategically:
 | **Sentinel** | Enemy attacks ally | Free attack on attacker |
 
 Reactions reset at the start of your turn. Use `/reaction` to trigger manually.
+
+---
+
+## 🔋 Resource Auto-Consumption
+
+The bot automatically detects spell casting and ability usage from your narrative actions:
+
+### Features
+- **Spell Detection**: "I cast Fireball" → Auto-deducts a 3rd-level slot
+- **Upcasting**: "I cast Cure Wounds at 3rd level" → Uses correct slot
+- **Class Abilities**: "I enter a rage" → Deducts Barbarian rage use
+- **Consumables**: "I drink a healing potion" → Removes from inventory
+- **Ammunition**: "I fire an arrow" → Tracks ammo count
+
+### Detected Class Resources
+| Class | Resources Tracked |
+|-------|-------------------|
+| **Barbarian** | Rage uses |
+| **Bard** | Bardic Inspiration |
+| **Cleric/Paladin** | Channel Divinity |
+| **Druid** | Wild Shape uses |
+| **Fighter** | Action Surge, Second Wind |
+| **Monk** | Ki Points |
+| **Paladin** | Divine Smite, Lay on Hands |
+| **Sorcerer** | Sorcery Points |
+| **Warlock** | Pact Magic slots |
+| **Wizard** | Arcane Recovery |
+
+### Spell Detection Patterns
+The system recognizes various ways to describe casting:
+- "I cast Fireball"
+- "Elara casts Healing Word"
+- "Using my action to cast Shield"
+- "I speak the words of Thunderwave"
+- "Invoking Sacred Flame"
+
+### Consumable Tracking
+| Type | Examples |
+|------|----------|
+| **Potions** | Healing Potion, Potion of Invisibility |
+| **Scrolls** | Scroll of Fireball, Spell Scroll |
+| **Ammunition** | Arrows, Bolts, Darts, Bullets |
+
+### Resource Recovery
+- **Short Rest**: Ki, Warlock slots, Second Wind, Channel Divinity
+- **Long Rest**: All spell slots, rage, bardic inspiration, all class resources
+
+Use `/resources` to view your current resource status at any time.
 
 ---
 
@@ -530,6 +579,7 @@ AIDungeon/
 │   ├── xp_manager.py          # XP tracking + auto-leveling
 │   ├── loot_manager.py        # Treasure tables + loot generation
 │   ├── reaction_manager.py    # Combat reactions (Shield, AoO, etc.)
+│   ├── resource_manager.py    # Auto-consumption of spells, abilities, items
 │   └── ambient_manager.py     # Ambient music + sound effects
 ├── webportal/
 │   ├── routes.py              # Flask routes

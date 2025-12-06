@@ -15,12 +15,13 @@
 9. [XP & Leveling](#xp--leveling)
 10. [Loot & Treasure](#loot--treasure)
 11. [Spellcasting](#spellcasting)
-12. [Rest & Recovery](#rest--recovery)
-13. [DM Tools](#dm-tools)
-14. [Tactical Maps](#tactical-maps)
-15. [Player Handouts](#player-handouts)
-16. [Voice & Ambient](#voice--ambient)
-17. [Example Session](#example-session)
+12. [Resource Auto-Consumption](#resource-auto-consumption)
+13. [Rest & Recovery](#rest--recovery)
+14. [DM Tools](#dm-tools)
+15. [Tactical Maps](#tactical-maps)
+16. [Player Handouts](#player-handouts)
+17. [Voice & Ambient](#voice--ambient)
+18. [Example Session](#example-session)
 
 ---
 
@@ -443,6 +444,113 @@ Shows current HP, conditions, and spell slot usage.
 
 ---
 
+## Resource Auto-Consumption
+
+The bot automatically detects when you use spells, class abilities, or consumables in your narrative actions and deducts the appropriate resources.
+
+### How It Works
+
+When you use `/do` with an action that involves a spell or ability, the bot:
+1. **Detects** the spell or ability from your description
+2. **Validates** you have the resource available
+3. **Consumes** the appropriate slot/charge/item
+4. **Notifies** you of the resource usage
+
+### Examples
+
+```
+Player: /do I cast Fireball at the group of goblins
+Bot: 🔥 Spell slot used: 3rd level (2/3 remaining)
+     [AI narration of the Fireball effect...]
+
+Player: /do Ragnar enters a rage and charges at the ogre
+Bot: 💢 Rage activated! (2/3 uses remaining)
+     [AI narration of the barbarian's fury...]
+
+Player: /do I drink my healing potion
+Bot: 🧪 Consumed: Potion of Healing (removed from inventory)
+     [AI narration of drinking the potion...]
+```
+
+### View Your Resources
+```
+/resources
+```
+Shows a complete breakdown of your resource status:
+
+```
+📊 Resource Status for Thorin
+
+⚔️ Class Resources:
+  Rage: 2/3 remaining
+  Reckless Attack: Available
+
+📦 Consumables:
+  Potion of Healing: 2
+  Arrows: 18
+
+🎒 Ammunition:
+  Arrows: 18/20 used
+```
+
+### Detected Spell Patterns
+
+The system recognizes many ways to describe casting:
+- "I cast Fireball"
+- "Elara speaks the words of Healing Word"
+- "Using my action to cast Shield"
+- "I invoke Sacred Flame"
+- "Casting Cure Wounds at 3rd level" (upcasting)
+
+### Detected Class Abilities
+
+| Class | Abilities Tracked |
+|-------|-------------------|
+| **Barbarian** | Rage, Reckless Attack |
+| **Bard** | Bardic Inspiration, Cutting Words |
+| **Cleric** | Channel Divinity, Turn Undead |
+| **Druid** | Wild Shape |
+| **Fighter** | Action Surge, Second Wind |
+| **Monk** | Ki Points (Flurry of Blows, Patient Defense, Step of the Wind, Stunning Strike) |
+| **Paladin** | Divine Smite, Lay on Hands, Channel Divinity |
+| **Sorcerer** | Sorcery Points, Metamagic |
+| **Warlock** | Pact Magic slots |
+| **Wizard** | Arcane Recovery |
+
+### Detected Consumables
+
+| Category | Examples |
+|----------|----------|
+| **Potions** | Healing Potion, Potion of Invisibility, Potion of Resistance |
+| **Scrolls** | Scroll of Fireball, Spell Scroll (any level) |
+| **Ammunition** | Arrows, Bolts, Darts, Sling Bullets, Blowgun Needles |
+
+### Upcasting Detection
+
+The system detects when you want to cast at a higher level:
+```
+Player: /do I cast Cure Wounds at 3rd level on Thorin
+Bot: ✨ Spell slot used: 3rd level (for Cure Wounds upcast)
+     Thorin is healed for 3d8+3 hit points!
+```
+
+### Resource Validation
+
+If you try to use a resource you don't have:
+```
+Player: /do I cast Fireball
+Bot: ❌ Cannot cast Fireball - no 3rd level or higher spell slots remaining!
+```
+
+### Manual Override
+
+If the auto-detection gets it wrong, you can manually manage:
+- Use `/cast` for explicit spell slot usage
+- Use `/inventory remove` to manually remove items
+- The DM can adjust resources as needed
+
+---
+
 ## Rest & Recovery
 
 ### Short Rest (1 hour)
@@ -858,6 +966,7 @@ Bot: 📜 TORN PAGE (Clue)
 | `/attack` | Attack target |
 | `/reaction` | Use reaction (Shield, Counterspell, etc.) |
 | `/cast` | Cast a spell |
+| `/resources` | View spell slots, abilities, consumables |
 | `/nextturn` | Advance to next turn |
 | `/turntimer` | Configure turn timer (DM) |
 | `/timeleft` | Check remaining turn time |

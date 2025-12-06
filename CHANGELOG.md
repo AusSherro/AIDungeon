@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.11.0] - 2025-12-06
+### Added
+- **Resource Auto-Consumption System**: Automatic detection and consumption of resources from narrative
+  - New `utils/resource_manager.py` module (700+ lines) with comprehensive resource tracking
+  - `DetectedSpell`, `DetectedAbility`, `DetectedConsumable` dataclasses
+  - `ResourceConsumption` dataclass for tracking consumption results
+  - Spell casting detection from narrative text with pattern matching
+  - Class ability detection for all PHB classes
+  - Consumable detection (potions, scrolls, ammunition)
+- **Spell Detection**: Automatic spell slot consumption
+  - `detect_spell_cast()` with regex patterns for casting phrases
+  - Support for all SRD spells with aliases (e.g., "fire ball" → "Fireball")
+  - Cantrip detection (no slot consumption)
+  - Automatic upcast to available slot level if primary slot exhausted
+  - Spell slot remaining display after cast
+- **Class Resource Tracking**: All PHB class abilities tracked
+  - Barbarian: Rage uses
+  - Bard: Bardic Inspiration
+  - Cleric/Paladin: Channel Divinity
+  - Druid: Wild Shape uses
+  - Fighter: Action Surge, Second Wind
+  - Monk: Ki points (Flurry of Blows, Patient Defense, Step of the Wind, Stunning Strike)
+  - Paladin: Divine Smite (uses spell slots), Lay on Hands pool
+  - Sorcerer: Sorcery Points (Metamagic)
+- **Consumable Tracking**: Automatic inventory management
+  - Potion detection ("drink/quaff/use potion of X")
+  - Scroll detection ("read/use scroll of X")
+  - Ammunition tracking (arrows, bolts, darts, sling bullets)
+  - Automatic removal from inventory on use
+- **New Commands**:
+  - `/resources` - View all character resources (spell slots, class abilities, consumables)
+
+### Changed
+- `/do` command now automatically detects and consumes resources from narrative
+- Resource consumption notifications appear after narration
+- Spell slots, class abilities, and consumables tracked in real-time
+
 ## [0.10.0] - 2025-12-06
 ### Added
 - **Skill Check Resolution Loop**: Complete closed-loop skill check system with AI narration

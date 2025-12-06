@@ -131,6 +131,11 @@ from utils.skill_check_manager import (
     format_check_result, format_group_check_result, build_roll_prompt,
     CheckType, PendingCheck
 )
+from utils.resource_manager import (
+    process_narrative_for_resources, format_resource_status,
+    detect_spell_cast, detect_class_ability, detect_consumable_use,
+    ResourceConsumption, DetectedSpell, DetectedAbility, DetectedConsumable
+)
 
 load_dotenv()
 Config.validate()
@@ -612,6 +617,11 @@ async def do_action(interaction: discord.Interaction, action: str):
     for notation, result in rolls.items():
         action = action.replace(f"[{notation}]", f"**{result}** ({notation})")
 
+    # ==== PHASE 4: Resource Auto-Consumption ====
+    # Detect and consume resources (spells, class abilities, consumables) from the action
+    resource_result = process_narrative_for_resources(user_id, action, auto_consume=True)
+    resource_summary = resource_result.get('summary', '')
+
     # Build system prompt and get AI response
     system_prompt = build_system_prompt(state)
     narration, updated_state = get_dm_response(action, state, user_id, system_prompt=system_prompt)
@@ -623,6 +633,10 @@ async def do_action(interaction: discord.Interaction, action: str):
 
     # Format output
     output = f"**{char_name}:** *{action}*\n\n{text}"
+    
+    # Add resource consumption notifications
+    if resource_summary:
+        output += f"\n\n{resource_summary}"
     
     # Add loot notifications
     for item in loot_items:
@@ -2296,6 +2310,23 @@ async def cast_cmd(
     combat_state = load_combat(channel_id)
     if combat_state:
         await check_legendary_actions(interaction, channel_id, combat_state)
+
+
+@bot.tree.command(name="resources", description="View your character's resources (spell slots, class abilities, consumables)")
+async def resources_cmd(interaction: discord.Interaction):
+    """Display your character's current resource status."""
+    user_id = str(interaction.user.id)
+    char = load_character(user_id)
+    
+    if not char:
+        await interaction.response.send_message("Create a character first!", ephemeral=True)
+        return
+    
+    char_name = char.get('name', 'Character')
+    status = format_resource_status(user_id)
+    
+    output = f"# 📊 {char_name}'s Resources\n\n{status}"
+    await interaction.response.send_message(output)
 
 
 @bot.tree.command(name="prepare", description="Prepare or unprepare a spell")
