@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.13.0] - 2025-12-06
+### Added
+- **Quest & Objective Tracking System**: Comprehensive quest management with progress tracking
+  - New `utils/quest_manager.py` module (800+ lines) with full quest management
+  - `Quest`, `QuestObjective`, `QuestReward` dataclasses for structured quest data
+  - Quest types: main, side, faction, personal, bounty, fetch, escort, explore, mystery
+  - Quest difficulties: trivial, easy, medium, hard, deadly, legendary with XP/gold scaling
+  - Multi-objective quests with progress tracking (e.g., "Kill 5 goblins: 3/5")
+  - Optional and hidden objectives
+  - Player notes on quests
+- **Milestone Detection**: Automatic detection of quest progress from AI narration
+  - Pattern matching for quest completion, item retrieval, enemy defeat, rescues
+  - Objective progress detection from narration context
+  - Quest failure detection
+  - New quest offer detection
+- **Quest Rewards System**: Automatic rewards on quest completion
+  - XP rewards scaled by difficulty (50 XP trivial to 2500 XP legendary)
+  - Gold rewards scaled by difficulty
+  - Item rewards
+  - Faction reputation changes
+  - Special rewards
+- **Quest Templates**: Pre-defined quest structures for quick creation
+  - Bounty: Hunt a target
+  - Fetch: Retrieve an item
+  - Rescue: Save someone
+  - Investigate: Solve a mystery
+  - Clear Dungeon: Clear all threats
+  - Escort: Protect during journey
+- **Enhanced AI Context**: Active quests included in AI prompts
+  - Current objectives listed for AI awareness
+  - AI acknowledges quest progress naturally in narration
+- **New Commands**:
+  - `/quests` - View full quest log with active and available quests
+  - `/quest` - View specific quest details or create new quest
+  - `/questcomplete` - Mark a quest as completed
+  - `/questabandon` - Abandon an active quest
+  - `/questobjective` - Add an objective to a quest
+  - `/questprogress` - Update progress on quest objective
+  - `/questnote` - Add a note to a quest
+  - `/questtemplate` - Create quest from pre-defined template
+
+### Changed
+- `/do` command now auto-detects quest progress from AI narration
+- `build_system_prompt()` now includes active quest context
+- Quest completion triggers reward notifications in chat
+- Completed objectives and quests shown in `/do` output
+
 ## [0.12.0] - 2025-12-06
 ### Added
 - **NPC Memory & Dialogue System**: Complete NPC relationship and memory tracking

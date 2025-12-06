@@ -115,6 +115,19 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 | `/buy merchant:"Name" item:"Item" quantity:1` | Buy from a merchant |
 | `/sell merchant:"Name" item:"Item" base_price:10` | Sell to a merchant |
 
+### Quest Tracking
+| Command | Description |
+|---------|-------------|
+| `/quests` | View full quest log |
+| `/quest name:"Name"` | View specific quest details |
+| `/quest name:"Name" description:"..."` | Create a new quest |
+| `/questcomplete quest_name:"Name"` | Mark quest as completed |
+| `/questabandon quest_name:"Name"` | Abandon an active quest |
+| `/questobjective quest_name:"Name" objective:"..."` | Add objective to quest |
+| `/questprogress quest_name:"Name" objective_number:1` | Update objective progress |
+| `/questnote quest_name:"Name" note:"..."` | Add note to a quest |
+| `/questtemplate template:bounty name:"..." description:"..."` | Create from template |
+
 ### Loot & Treasure
 | Command | Description |
 |---------|-------------|
@@ -325,7 +338,78 @@ Each NPC automatically gets a unique voice based on:
 
 ---
 
-## 💰 Loot & Treasure System
+## � Quest & Objective Tracking
+
+Track active quests with objectives and progress:
+
+### Quest Types
+| Type | Description |
+|------|-------------|
+| 🌟 Main | Core story quests |
+| 📌 Side | Optional side quests |
+| 🏛️ Faction | Faction-related quests |
+| 💭 Personal | Character backstory quests |
+| 🎯 Bounty | Hunt a target |
+| 📦 Fetch | Retrieve an item |
+| 🛡️ Escort | Protect someone |
+| 🗺️ Explore | Discover a location |
+| 🔍 Mystery | Investigate/solve |
+
+### Quest Difficulties
+| Difficulty | XP Reward | Gold Reward |
+|------------|-----------|-------------|
+| Trivial | 50 XP | 10 gp |
+| Easy | 100 XP | 25 gp |
+| Medium | 250 XP | 50 gp |
+| Hard | 500 XP | 150 gp |
+| Deadly | 1000 XP | 500 gp |
+| Legendary | 2500 XP | 2000 gp |
+
+### Multi-Objective Quests
+Quests can have multiple objectives with progress tracking:
+```
+⚔️ Clear the Goblin Cave
+Progress: [▓▓▓░░] 3/5
+
+Objectives:
+☑️ Enter the cave
+☑️ Find the goblin leader
+☑️ Defeat the goblins (4/5)
+☐ Rescue the prisoners
+☐ Return to town
+```
+
+### Auto-Detection
+Quest progress is automatically detected from AI narration:
+- "You've retrieved the artifact" → Fetch objective completes
+- "The dragon is slain" → Defeat objective completes
+- "The hostages are freed" → Rescue objective completes
+
+### Quest Commands
+| Command | Description |
+|---------|-------------|
+| `/quests` | View full quest log |
+| `/quest <name>` | View specific quest details |
+| `/quest <name> description:<desc>` | Create new quest |
+| `/questcomplete <name>` | Mark quest complete |
+| `/questabandon <name>` | Abandon a quest |
+| `/questobjective <quest> <objective>` | Add objective |
+| `/questprogress <quest> <num> [amount]` | Update progress |
+| `/questnote <quest> <note>` | Add player note |
+| `/questtemplate <type> <name> <desc>` | Create from template |
+
+### Quest Templates
+Quick-create quests with pre-defined objectives:
+- **Bounty** - Locate → Defeat → Return
+- **Fetch** - Find location → Retrieve → Deliver
+- **Rescue** - Find captive → Defeat captors → Escort to safety
+- **Investigate** - Gather clues → Interview witnesses → Uncover truth
+- **Clear Dungeon** - Enter → Clear threats → Secure area
+- **Escort** - Meet client → Protect journey → Deliver safely
+
+---
+
+## �💰 Loot & Treasure System
 
 Automatic loot generation when combat ends:
 
@@ -655,6 +739,7 @@ AIDungeon/
 │   ├── reaction_manager.py    # Combat reactions (Shield, AoO, etc.)
 │   ├── resource_manager.py    # Auto-consumption of spells, abilities, items
 │   ├── npc_manager.py         # NPC memory, factions, merchants, shops
+│   ├── quest_manager.py       # Quest tracking, objectives, rewards
 │   └── ambient_manager.py     # Ambient music + sound effects
 ├── webportal/
 │   ├── routes.py              # Flask routes

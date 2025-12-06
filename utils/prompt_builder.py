@@ -22,6 +22,7 @@ def build_system_prompt(state: dict, channel_id: str = None) -> str:
     # Get NPC context if channel_id provided
     npc_context = ""
     faction_context = ""
+    quest_context = ""
     if channel_id:
         try:
             from utils.npc_manager import get_nearby_npcs, get_faction_context_for_ai
@@ -40,6 +41,15 @@ def build_system_prompt(state: dict, channel_id: str = None) -> str:
                 faction_context = "\n" + faction_context
         except Exception:
             pass  # If NPC manager not available, skip
+        
+        # Get quest context
+        try:
+            from utils.quest_manager import get_quest_context_for_ai
+            quest_context = get_quest_context_for_ai(channel_id)
+            if quest_context:
+                quest_context = "\n\n" + quest_context
+        except Exception:
+            pass  # If quest manager not available, skip
 
     system_prompt = f"""You are the Dungeon Master for a Discord-based D&D 5e campaign. Your role is to narrate the story, control NPCs, and respond to player actions with immersive descriptions.
 
@@ -52,13 +62,14 @@ def build_system_prompt(state: dict, channel_id: str = None) -> str:
 
 **Party:** {party_comp if party_comp else 'Unknown adventurers'}
 
-**Recent Events:** {actions_text if actions_text else 'The adventure begins...'}{npc_context}{faction_context}
+**Recent Events:** {actions_text if actions_text else 'The adventure begins...'}{npc_context}{faction_context}{quest_context}
 
 **Your Response Style:**
 1. Describe the scene and NPC reactions vividly (2-3 sentences)
 2. Use [Voice: Character Name] tags for NPC dialogue
 3. Keep narration under 150 words
 4. NPCs should remember previous interactions and react accordingly to party reputation
+5. When the party makes progress on active quests, acknowledge it naturally in your narration
 
 **CRITICAL - SKILL CHECKS:**
 Most actions in D&D require dice rolls! ALWAYS ask for a skill check when the player attempts:

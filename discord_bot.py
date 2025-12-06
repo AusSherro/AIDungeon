@@ -147,6 +147,18 @@ from utils.npc_manager import (
     get_nearby_npcs, format_npc_summary, format_faction_summary,
     process_npc_from_narration, get_standing_title
 )
+from utils.quest_manager import (
+    Quest, QuestObjective, QuestReward, QuestStatus, QuestType, QuestDifficulty,
+    load_quests, save_quests, get_quest, get_quest_by_name,
+    create_quest, update_quest, delete_quest,
+    get_active_quests, get_completed_quests, get_available_quests,
+    add_objective, update_objective_progress, complete_objective, fail_objective,
+    complete_quest, fail_quest, abandon_quest, accept_quest,
+    detect_quest_progress, detect_new_quest, process_narration_for_quests,
+    format_quest_summary, format_quest_log, format_quest_rewards_message,
+    get_quest_context_for_ai, QUEST_TEMPLATES, create_quest_from_template,
+    add_note_to_quest
+)
 
 load_dotenv()
 Config.validate()
@@ -652,6 +664,24 @@ async def do_action(interaction: discord.Interaction, action: str):
             record_npc_interaction(channel_id, detected_npc.name, char_names)
         npc_notification = f"\n\n👤 *New NPC met: **{detected_npc.name}** ({detected_npc.role.replace('_', ' ').title()})*"
     
+    # ==== PHASE 6: Auto-detect quest progress from narration ====
+    quest_events = process_narration_for_quests(channel_id, narration)
+    quest_notification = ""
+    for event in quest_events:
+        if event["type"] == "objective_complete":
+            quest_notification += f"\n\n✅ *Objective complete: {event['message']}*"
+        elif event["type"] == "quest_complete":
+            quest = event["quest"]
+            rewards = event.get("rewards")
+            quest_notification += f"\n\n🎉 **Quest Complete: {quest.name}!**"
+            if rewards:
+                if rewards.xp > 0:
+                    quest_notification += f"\n⭐ +{rewards.xp} XP"
+                if rewards.gold > 0:
+                    quest_notification += f"\n💰 +{rewards.gold} gp"
+        elif event["type"] == "quest_failed":
+            quest_notification += f"\n\n❌ *{event['message']}*"
+    
     # Process loot
     loot_items = updated_state.pop('recent_loot', [])
     voice_tag = extract_voice_tag(narration)
@@ -667,6 +697,10 @@ async def do_action(interaction: discord.Interaction, action: str):
     # Add NPC notification
     if npc_notification:
         output += npc_notification
+    
+    # Add quest notification
+    if quest_notification:
+        output += quest_notification
     
     # Add loot notifications
     for item in loot_items:
@@ -1473,6 +1507,483 @@ async def sell_cmd(
     await interaction.response.send_message(
         f"💰 Sold **{quantity}x {item}** for **{gold_received} gp**!"
     )
+
+
+# =============================================================================
+# QUEST COMMANDS
+# =============================================================================
+
+QUEST_TYPES = ["main", "side", "faction", "personal", "bounty", "fetch", "escort", "explore", "mystery"]
+QUEST_DIFFICULTIES = ["trivial", "easy", "medium", "hard", "deadly", "legendary"]
+QUEST_STATUSES = ["available", "active", "completed", "failed", "abandoned"]
+
+@bot.tree.command(name="quests", description="View your quest log")
+@app_commands.describe(
+    show_completed="Include completed quests in the list"
+)
+async def quests_cmd(
+    interaction: discord.Interaction,
+    show_completed: bool = False
+):
+    """View active, available, and optionally completed quests."""
+    channel_id = str(interaction.channel.id)
+    
+    quest_log = format_quest_log(channel_id, include_completed=show_completed)
+    
+    # Split into chunks if too long
+    if len(quest_log) > 1900:
+        # Send as embed for better formatting
+        embed = discord.Embed(
+            title="📜 Quest Log",
+            color=discord.Color.gold()
+        )
+        
+        active = get_active_quests(channel_id)
+        available = get_available_quests(channel_id)
+        
+        if active:
+            active_text = ""
+            for q in active[:10]:  # Limit to 10
+                progress = f"({q.get_progress()[0]}/{q.get_progress()[1]})"
+                active_text += f"• **{q.name}** {progress}\n"
+            embed.add_field(name="⚔️ Active Quests", value=active_text or "None", inline=False)
+        
+        if available:
+            avail_text = "\n".join([f"• {q.name}" for q in available[:5]])
+            embed.add_field(name="📋 Available Quests", value=avail_text, inline=False)
+        
+        if show_completed:
+            completed = get_completed_quests(channel_id)
+            if completed:
+                comp_text = "\n".join([f"✅ {q.name}" for q in completed[-5:]])
+                embed.add_field(name="✅ Completed", value=comp_text, inline=False)
+        
+        if not active and not available:
+            embed.description = "*No active quests. Use `/quest create` to add one!*"
+        
+        await interaction.response.send_message(embed=embed)
+    else:
+        await interaction.response.send_message(quest_log)
+
+
+@bot.tree.command(name="quest", description="View details of a specific quest or create a new one")
+@app_commands.describe(
+    name="Quest name to view or create",
+    description="Description for new quest",
+    quest_type="Type of quest",
+    difficulty="Quest difficulty",
+    giver="NPC who gave the quest",
+    objectives="Comma-separated list of objectives"
+)
+@app_commands.choices(
+    quest_type=[app_commands.Choice(name=t.replace('_', ' ').title(), value=t) for t in QUEST_TYPES],
+    difficulty=[app_commands.Choice(name=d.title(), value=d) for d in QUEST_DIFFICULTIES]
+)
+async def quest_cmd(
+    interaction: discord.Interaction,
+    name: str = "",
+    description: str = "",
+    quest_type: str = "side",
+    difficulty: str = "medium",
+    giver: str = "",
+    objectives: str = ""
+):
+    """View quest details or create a new quest."""
+    channel_id = str(interaction.channel.id)
+    
+    if not name:
+        # Show help or list
+        await interaction.response.send_message(
+            "**Quest Commands:**\n"
+            "• `/quests` - View all quests\n"
+            "• `/quest <name>` - View specific quest\n"
+            "• `/quest <name> description:<desc>` - Create new quest\n"
+            "• `/questcomplete <name>` - Complete a quest\n"
+            "• `/questabandon <name>` - Abandon a quest\n"
+            "• `/questobjective <quest> <objective>` - Add objective\n"
+            "• `/questnote <quest> <note>` - Add note to quest",
+            ephemeral=True
+        )
+        return
+    
+    # Check if quest exists
+    existing = get_quest_by_name(channel_id, name)
+    
+    if existing and not description:
+        # View existing quest
+        summary = format_quest_summary(existing, show_rewards=True)
+        
+        embed = discord.Embed(
+            title=f"📜 {existing.name}",
+            description=existing.description,
+            color=discord.Color.gold() if existing.status == "active" else discord.Color.green()
+        )
+        
+        # Status
+        status_emoji = {"active": "⚔️", "completed": "✅", "failed": "❌", "available": "📋", "abandoned": "🚫"}
+        embed.add_field(
+            name="Status",
+            value=f"{status_emoji.get(existing.status, '📜')} {existing.status.title()}",
+            inline=True
+        )
+        embed.add_field(name="Type", value=existing.quest_type.title(), inline=True)
+        embed.add_field(name="Difficulty", value=existing.difficulty.title(), inline=True)
+        
+        # Objectives
+        objs = existing.get_objectives()
+        if objs:
+            obj_text = ""
+            for obj in objs:
+                if obj.is_hidden:
+                    continue
+                check = "☑️" if obj.is_complete() else "☐"
+                opt = " *(optional)*" if obj.is_optional else ""
+                if obj.required > 1:
+                    obj_text += f"{check} {obj.description} ({obj.progress}/{obj.required}){opt}\n"
+                else:
+                    obj_text += f"{check} {obj.description}{opt}\n"
+            if obj_text:
+                embed.add_field(name="Objectives", value=obj_text, inline=False)
+        
+        # Rewards
+        rewards = existing.get_rewards()
+        reward_parts = []
+        if rewards.xp > 0:
+            reward_parts.append(f"⭐ {rewards.xp} XP")
+        if rewards.gold > 0:
+            reward_parts.append(f"💰 {rewards.gold} gp")
+        if rewards.items:
+            reward_parts.append(f"🎁 {', '.join(rewards.items)}")
+        if reward_parts:
+            embed.add_field(name="Rewards", value="\n".join(reward_parts), inline=False)
+        
+        # Quest giver
+        if existing.giver_npc:
+            embed.set_footer(text=f"Quest Giver: {existing.giver_npc}")
+        
+        # Notes
+        if existing.notes:
+            embed.add_field(name="Notes", value="\n".join(existing.notes[-3:]), inline=False)
+        
+        await interaction.response.send_message(embed=embed)
+    
+    elif description:
+        # Create new quest
+        obj_list = [o.strip() for o in objectives.split(",")] if objectives else None
+        
+        new_quest = create_quest(
+            channel_id=channel_id,
+            name=name,
+            description=description,
+            quest_type=quest_type,
+            difficulty=difficulty,
+            giver_npc=giver,
+            objectives=obj_list
+        )
+        
+        embed = discord.Embed(
+            title="📜 New Quest Created!",
+            description=f"**{new_quest.name}**\n{new_quest.description}",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Type", value=new_quest.quest_type.title(), inline=True)
+        embed.add_field(name="Difficulty", value=new_quest.difficulty.title(), inline=True)
+        
+        rewards = new_quest.get_rewards()
+        embed.add_field(name="Base Rewards", value=f"⭐ {rewards.xp} XP, 💰 {rewards.gold} gp", inline=True)
+        
+        await interaction.response.send_message(embed=embed)
+    
+    else:
+        await interaction.response.send_message(
+            f"❌ Quest **{name}** not found. Add a description to create it.",
+            ephemeral=True
+        )
+
+
+@bot.tree.command(name="questcomplete", description="Mark a quest as completed")
+@app_commands.describe(
+    quest_name="Name of the quest to complete"
+)
+async def quest_complete_cmd(
+    interaction: discord.Interaction,
+    quest_name: str
+):
+    """Complete a quest and award rewards."""
+    channel_id = str(interaction.channel.id)
+    
+    quest = get_quest_by_name(channel_id, quest_name)
+    if not quest:
+        await interaction.response.send_message(
+            f"❌ Quest **{quest_name}** not found.",
+            ephemeral=True
+        )
+        return
+    
+    if quest.status == "completed":
+        await interaction.response.send_message(
+            f"Quest **{quest.name}** is already completed!",
+            ephemeral=True
+        )
+        return
+    
+    success, rewards, message = complete_quest(channel_id, quest.id)
+    
+    if success:
+        embed = discord.Embed(
+            title="🎉 Quest Complete!",
+            description=f"**{quest.name}**",
+            color=discord.Color.green()
+        )
+        
+        if rewards:
+            reward_text = []
+            if rewards.xp > 0:
+                reward_text.append(f"⭐ **{rewards.xp}** Experience Points")
+            if rewards.gold > 0:
+                reward_text.append(f"💰 **{rewards.gold}** Gold Pieces")
+            if rewards.items:
+                reward_text.append(f"🎁 **Items:** {', '.join(rewards.items)}")
+            if rewards.reputation:
+                for faction, change in rewards.reputation.items():
+                    sign = "+" if change > 0 else ""
+                    reward_text.append(f"🏛️ **{faction}:** {sign}{change} reputation")
+            if rewards.special:
+                reward_text.append(f"✨ {rewards.special}")
+            
+            if reward_text:
+                embed.add_field(name="Rewards", value="\n".join(reward_text), inline=False)
+        
+        await interaction.response.send_message(embed=embed)
+    else:
+        await interaction.response.send_message(f"❌ {message}", ephemeral=True)
+
+
+@bot.tree.command(name="questabandon", description="Abandon a quest")
+@app_commands.describe(
+    quest_name="Name of the quest to abandon"
+)
+async def quest_abandon_cmd(
+    interaction: discord.Interaction,
+    quest_name: str
+):
+    """Abandon a quest (player choice to give up)."""
+    channel_id = str(interaction.channel.id)
+    
+    quest = get_quest_by_name(channel_id, quest_name)
+    if not quest:
+        await interaction.response.send_message(
+            f"❌ Quest **{quest_name}** not found.",
+            ephemeral=True
+        )
+        return
+    
+    if quest.status != "active":
+        await interaction.response.send_message(
+            f"Quest **{quest.name}** is not active (status: {quest.status}).",
+            ephemeral=True
+        )
+        return
+    
+    if abandon_quest(channel_id, quest.id):
+        await interaction.response.send_message(
+            f"🚫 **Quest Abandoned:** {quest.name}\n*You can always pick it up again later if available.*"
+        )
+    else:
+        await interaction.response.send_message("❌ Failed to abandon quest.", ephemeral=True)
+
+
+@bot.tree.command(name="questobjective", description="Add an objective to a quest")
+@app_commands.describe(
+    quest_name="Name of the quest",
+    objective="Description of the objective",
+    required="Number required (for 'kill 5 goblins' style objectives)",
+    is_optional="Whether this objective is optional"
+)
+async def quest_objective_cmd(
+    interaction: discord.Interaction,
+    quest_name: str,
+    objective: str,
+    required: int = 1,
+    is_optional: bool = False
+):
+    """Add a new objective to an existing quest."""
+    channel_id = str(interaction.channel.id)
+    
+    quest = get_quest_by_name(channel_id, quest_name)
+    if not quest:
+        await interaction.response.send_message(
+            f"❌ Quest **{quest_name}** not found.",
+            ephemeral=True
+        )
+        return
+    
+    new_obj = add_objective(
+        channel_id=channel_id,
+        quest_id=quest.id,
+        description=objective,
+        required=required,
+        is_optional=is_optional
+    )
+    
+    if new_obj:
+        opt = " *(optional)*" if is_optional else ""
+        req = f" (0/{required})" if required > 1 else ""
+        await interaction.response.send_message(
+            f"✅ Added objective to **{quest.name}**:\n☐ {objective}{req}{opt}"
+        )
+    else:
+        await interaction.response.send_message("❌ Failed to add objective.", ephemeral=True)
+
+
+@bot.tree.command(name="questprogress", description="Update progress on a quest objective")
+@app_commands.describe(
+    quest_name="Name of the quest",
+    objective_number="Objective number (1, 2, 3...)",
+    progress="Amount of progress to add"
+)
+async def quest_progress_cmd(
+    interaction: discord.Interaction,
+    quest_name: str,
+    objective_number: int,
+    progress: int = 1
+):
+    """Add progress to a quest objective."""
+    channel_id = str(interaction.channel.id)
+    
+    quest = get_quest_by_name(channel_id, quest_name)
+    if not quest:
+        await interaction.response.send_message(
+            f"❌ Quest **{quest_name}** not found.",
+            ephemeral=True
+        )
+        return
+    
+    obj_id = f"obj_{objective_number}"
+    completed, message = update_objective_progress(channel_id, quest.id, obj_id, progress)
+    
+    if message:
+        if completed:
+            # Check if quest is fully complete
+            updated = get_quest(channel_id, quest.id)
+            if updated and updated.is_complete():
+                success, rewards, comp_msg = complete_quest(channel_id, quest.id)
+                if success:
+                    msg = f"{message}\n\n🎉 **Quest Complete: {quest.name}!**"
+                    if rewards and rewards.xp > 0:
+                        msg += f"\nRewards: ⭐ {rewards.xp} XP, 💰 {rewards.gold} gp"
+                    await interaction.response.send_message(msg)
+                    return
+            
+            await interaction.response.send_message(message)
+        else:
+            objectives = quest.get_objectives()
+            for obj in objectives:
+                if obj.id == obj_id:
+                    await interaction.response.send_message(
+                        f"📊 Progress updated: {obj.description} ({obj.progress}/{obj.required})"
+                    )
+                    return
+            await interaction.response.send_message("Progress updated.", ephemeral=True)
+    else:
+        await interaction.response.send_message(
+            f"❌ Objective {objective_number} not found in quest **{quest.name}**.",
+            ephemeral=True
+        )
+
+
+@bot.tree.command(name="questnote", description="Add a note to a quest")
+@app_commands.describe(
+    quest_name="Name of the quest",
+    note="Note to add"
+)
+async def quest_note_cmd(
+    interaction: discord.Interaction,
+    quest_name: str,
+    note: str
+):
+    """Add a player note to a quest."""
+    channel_id = str(interaction.channel.id)
+    
+    quest = get_quest_by_name(channel_id, quest_name)
+    if not quest:
+        await interaction.response.send_message(
+            f"❌ Quest **{quest_name}** not found.",
+            ephemeral=True
+        )
+        return
+    
+    if add_note_to_quest(channel_id, quest.id, note):
+        await interaction.response.send_message(
+            f"📝 Note added to **{quest.name}**:\n*{note}*"
+        )
+    else:
+        await interaction.response.send_message("❌ Failed to add note.", ephemeral=True)
+
+
+@bot.tree.command(name="questtemplate", description="Create a quest from a template")
+@app_commands.describe(
+    template="Quest template to use",
+    name="Name for the quest",
+    description="Quest description",
+    giver="NPC who gave the quest"
+)
+@app_commands.choices(template=[
+    app_commands.Choice(name="Bounty - Hunt a target", value="bounty"),
+    app_commands.Choice(name="Fetch - Retrieve an item", value="fetch"),
+    app_commands.Choice(name="Rescue - Save someone", value="rescue"),
+    app_commands.Choice(name="Investigate - Solve a mystery", value="investigate"),
+    app_commands.Choice(name="Clear Dungeon - Clear all threats", value="clear_dungeon"),
+    app_commands.Choice(name="Escort - Protect during journey", value="escort")
+])
+async def quest_template_cmd(
+    interaction: discord.Interaction,
+    template: str,
+    name: str,
+    description: str,
+    giver: str = ""
+):
+    """Create a quest from a pre-defined template."""
+    channel_id = str(interaction.channel.id)
+    
+    quest = create_quest_from_template(
+        channel_id=channel_id,
+        template_name=template,
+        quest_name=name,
+        description=description,
+        giver_npc=giver
+    )
+    
+    if quest:
+        embed = discord.Embed(
+            title=f"📜 Quest Created: {quest.name}",
+            description=quest.description,
+            color=discord.Color.gold()
+        )
+        
+        objectives = quest.get_objectives()
+        if objectives:
+            obj_text = "\n".join([f"☐ {obj.description}" for obj in objectives])
+            embed.add_field(name="Objectives", value=obj_text, inline=False)
+        
+        rewards = quest.get_rewards()
+        embed.add_field(
+            name="Rewards",
+            value=f"⭐ {rewards.xp} XP, 💰 {rewards.gold} gp",
+            inline=True
+        )
+        embed.add_field(name="Type", value=quest.quest_type.title(), inline=True)
+        embed.add_field(name="Difficulty", value=quest.difficulty.title(), inline=True)
+        
+        if giver:
+            embed.set_footer(text=f"Quest Giver: {giver}")
+        
+        await interaction.response.send_message(embed=embed)
+    else:
+        await interaction.response.send_message(
+            f"❌ Template **{template}** not found.",
+            ephemeral=True
+        )
 
 
 # =============================================================================

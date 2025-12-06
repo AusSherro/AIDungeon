@@ -17,12 +17,13 @@
 11. [Spellcasting](#spellcasting)
 12. [Resource Auto-Consumption](#resource-auto-consumption)
 13. [NPC Memory & Factions](#npc-memory--factions)
-14. [Rest & Recovery](#rest--recovery)
-15. [DM Tools](#dm-tools)
-16. [Tactical Maps](#tactical-maps)
-17. [Player Handouts](#player-handouts)
-18. [Voice & Ambient](#voice--ambient)
-19. [Example Session](#example-session)
+14. [Quest Tracking](#quest-tracking)
+15. [Rest & Recovery](#rest--recovery)
+16. [DM Tools](#dm-tools)
+17. [Tactical Maps](#tactical-maps)
+18. [Player Handouts](#player-handouts)
+19. [Voice & Ambient](#voice--ambient)
+20. [Example Session](#example-session)
 
 ---
 
@@ -661,6 +662,150 @@ Each NPC automatically gets a unique voice based on:
 - **Race** - Elves sound ethereal, dwarves gruff
 - **Role** - Nobles commanding, merchants friendly
 - **Gender** - Appropriate voice variants
+
+---
+
+## Quest Tracking
+
+The quest system tracks your objectives, progress, and rewards throughout the adventure. Quests can be created manually by the DM, from templates, or detected automatically from AI narration.
+
+### Viewing Your Quest Log
+```
+/quests
+```
+Shows all your active quests with objectives and progress:
+```
+📜 Quest Log
+
+⚔️ ACTIVE QUESTS
+
+The Lost Mine of Phandelver [main] ★★★
+Escort Gundren to Phandalin and find Wave Echo Cave
+├── ☑ Escort Gundren to Phandalin (1/1)
+├── ○ Find out what happened to Gundren
+└── ○ Locate Wave Echo Cave (0/1)
+
+Goblin Bounty [bounty] ★
+Clear out the goblin threat on the Triboar Trail
+└── ○ Defeat goblins (3/10)
+```
+
+### Viewing a Specific Quest
+```
+/quest name:Lost Mine
+```
+Shows detailed information including notes, rewards, and quest giver.
+
+### Creating Quests (DM)
+```
+/quest name:Rescue the Prisoners description:Free the captives from Cragmaw Hideout difficulty:normal type:rescue
+```
+
+**Quest Difficulties:**
+| Difficulty | XP Reward | Gold Reward |
+|------------|-----------|-------------|
+| Trivial | 50 XP | 10 gp |
+| Easy | 100 XP | 25 gp |
+| Normal | 250 XP | 50 gp |
+| Hard | 500 XP | 100 gp |
+| Deadly | 1000 XP | 250 gp |
+| Epic | 2500 XP | 2000 gp |
+
+**Quest Types:** `main`, `side`, `bounty`, `fetch`, `rescue`, `investigate`, `escort`, `exploration`
+
+### Using Quest Templates
+
+Quickly create common quests using templates:
+```
+/questtemplate template:bounty target:Goblins count:10 reward:50gp location:Triboar Trail
+```
+
+**Available Templates:**
+- `bounty` - Hunt X enemies for reward
+- `fetch` - Retrieve a specific item
+- `rescue` - Save someone from danger
+- `investigate` - Uncover the truth about something
+- `clear_dungeon` - Clear out a dangerous location
+- `escort` - Protect someone on a journey
+
+### Adding Objectives
+```
+/questobjective quest:Lost Mine objective:Find the secret entrance type:discovery target_count:1
+```
+
+**Objective Types:**
+- `kill` - Defeat enemies
+- `collect` - Gather items
+- `discover` - Find locations or information
+- `talk` - Speak with NPCs
+- `escort` - Protect targets
+- `custom` - Anything else
+
+### Tracking Progress
+```
+/questprogress quest:Goblin Bounty objective:Defeat goblins progress:5
+```
+Updates objective progress (e.g., 3/10 → 5/10).
+
+### Adding Notes
+```
+/questnote quest:Lost Mine note:Gundren mentioned a map hidden in his boot
+```
+Add player notes to quests for reference.
+
+### Auto-Detection
+
+The system automatically detects quest progress from AI narration:
+
+**When you /do an action that completes an objective:**
+```
+/do I search the goblin chief's body for the map
+```
+*AI narrates finding the map...*
+```
+📜 Quest Progress!
+"The Lost Mine" - Objective "Find the map" COMPLETE!
+```
+
+**Detection patterns include:**
+- Item retrieval: "you found", "obtained", "picked up"
+- Enemy defeat: "defeated", "slain", "killed"
+- Rescue: "freed", "rescued", "saved"
+- Discovery: "discovered", "found", "revealed"
+- Delivery: "delivered", "handed over", "completed delivery"
+
+### Completing Quests
+```
+/questcomplete quest:Goblin Bounty
+```
+Completes the quest and awards rewards:
+```
+🎉 Quest Complete: Goblin Bounty!
+
+Rewards:
+  ⭐ 100 XP
+  💰 25 gp
+  📈 +10 reputation with Town Guard
+```
+
+### Abandoning Quests
+```
+/questabandon quest:Goblin Bounty reason:Too dangerous right now
+```
+Abandons the quest (can be re-accepted later).
+
+### Quest Commands Quick Reference
+
+| Command | Description |
+|---------|-------------|
+| `/quests` | View full quest log |
+| `/quest` | View/create specific quest |
+| `/questtemplate` | Create from template |
+| `/questobjective` | Add objective to quest |
+| `/questprogress` | Update objective progress |
+| `/questnote` | Add note to quest |
+| `/questcomplete` | Complete a quest |
+| `/questabandon` | Abandon a quest |
 
 ---
 
