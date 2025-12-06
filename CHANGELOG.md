@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.7.0] - 2025-12-06
+### Added
+- **XP & Auto-Leveling System**: Automatic experience point tracking
+  - XP awarded when combat ends based on enemy CR
+  - Party XP split equally or by contribution
+  - Auto-detection of level-up thresholds
+  - `/xp` command to view character XP and progress bar
+  - `/awardxp` DM command for milestone rewards
+  - XP threshold table for levels 1-20
+- **Loot & Treasure System**: Dynamic treasure generation
+  - `/loot` command to generate treasure hoards by CR
+  - Enemy loot drops based on creature type
+  - Magic item tables by rarity (Common to Legendary)
+  - Gems and art objects by value tier
+  - `/treasure` command for DM-controlled loot distribution
+- **Combat Reactions**: D&D 5e reaction mechanics
+  - `/reaction` command with 8 reaction types
+  - Opportunity Attacks when enemies leave reach
+  - Shield spell (+5 AC as reaction)
+  - Counterspell to interrupt enemy casting
+  - Uncanny Dodge for Rogues (halve damage)
+  - Absorb Elements, Hellish Rebuke, Cutting Words, Deflect Missiles
+  - Reaction tracking per round (auto-reset on turn start)
+  - Sentinel and Mage Slayer feat triggers
+- **Ambient Music & SFX**: Background atmosphere system
+  - AmbientMood presets: calm, tense, combat, mystery, celebration, horror, travel, dungeon
+  - `/ambient` command to set mood
+  - `/sfx` command for one-shot sound effects
+  - Placeholder track URLs (replace with royalty-free sources)
+- **NPC Voice Variety**: Distinct voices for different NPC archetypes
+  - Voice archetypes: noble, peasant, merchant, guard, scholar, rogue, mystic, warrior, child, elder
+  - Automatic voice selection based on NPC name/description
+  - Edge TTS as default (free), ElevenLabs for premium voices
+- **Auto-Combat Triggers**: AI-initiated combat detection
+  - Combat trigger patterns in AI narration (attack phrases, initiative calls)
+  - Automatic `/fight` initiation when hostilities begin
+  - Enemy extraction from narrative descriptions
+- **Party Dashboard**: Overview of all party members
+  - `/party` command showing HP, AC, conditions for all players
+  - Quick reference for DM and players
+- **Playthrough Guide**: Comprehensive documentation
+  - Session zero setup instructions
+  - Command quick reference by category
+  - Combat flow walkthrough
+  - Voice and TTS configuration guide
+  - Troubleshooting and tips
+
+### Changed
+- Combat turn advancement now resets reactions for the active combatant
+- `/endcombat` now awards XP and generates loot automatically
+
 ## [0.6.0] - 2025-12-03
 ### Added
 - **Player Handouts System**: DM tools for sharing information with players

@@ -14,9 +14,10 @@ __pycache__/
 *.md.zip
 
 # Ignore site-packages
-**/Lib/
-**/Scripts/
-**/Include/
+venv/
+.venv/
+*/venv/
+*/.venv/
 
 # Ignore any dist-info garbage
 **/*.dist-info/
@@ -28,3 +29,31 @@ __pycache__/
 # Ignore system files
 .DS_Store
 Thumbs.db
+
+# Bytecode cache folders
+*.egg-info/
+.eggs/
+
+# Testing artifacts
+htmlcov/
+.tox/
+.coverage
+.pytest_cache/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Environment settings
+.env
+.env.*
+!.env.example
+# Runtime data
+characters/*.json
+logs/*.md
+state/*.json
+combat/*.json
+voice_profiles.json
+
+# Personal/local config
+agents.md
+ROADMAP.md

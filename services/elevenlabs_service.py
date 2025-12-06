@@ -6,9 +6,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
-TTS_PROVIDER = os.getenv('TTS_PROVIDER', 'elevenlabs').lower()  # 'elevenlabs', 'edge', or 'disabled'
+# Default to 'edge' since it's more reliable and free
+TTS_PROVIDER = os.getenv('TTS_PROVIDER', 'edge').lower()  # 'elevenlabs', 'edge', or 'disabled'
 
 API_URL = 'https://api.elevenlabs.io/v1/text-to-speech/{voice_id}'
+
+# Default ElevenLabs voice ID (Rachel - general purpose narrator)
+DEFAULT_ELEVENLABS_VOICE = '21m00Tcm4TlvDq8ikWAM'
 
 # Edge TTS voice mapping (free Microsoft voices)
 EDGE_VOICE_MAP = {
@@ -18,6 +22,14 @@ EDGE_VOICE_MAP = {
     'male': 'en-US-GuyNeural',
     'old': 'en-GB-RyanNeural',
     'young': 'en-US-AnaNeural',
+    # Map ElevenLabs voice IDs to Edge voices
+    '21m00Tcm4TlvDq8ikWAM': 'en-US-JennyNeural',  # Rachel
+    'AZnzlk1XvdvUeBnXmlld': 'en-US-AriaNeural',   # Domi
+    'EXAVITQu4vr4xnSDxMaL': 'en-US-JennyNeural',  # Bella
+    'ErXwobaYiN019PkySvjV': 'en-US-GuyNeural',    # Antoni
+    'TxGEqnHWrfWFTfGW9XjX': 'en-US-DavisNeural',  # Josh
+    'VR6AewLTigWG4xSOukaG': 'en-US-ChristopherNeural',  # Arnold
+    'pNInz6obpgDQGcFmaJgB': 'en-US-GuyNeural',    # Adam
 }
 
 
@@ -45,6 +57,10 @@ def _elevenlabs_tts(text: str, voice_id: str) -> bytes:
     """Generate speech using ElevenLabs API."""
     if not ELEVENLABS_API_KEY:
         raise ValueError("ELEVENLABS_API_KEY not set")
+    
+    # Use default voice if none provided or invalid
+    if not voice_id or len(voice_id) < 10:
+        voice_id = DEFAULT_ELEVENLABS_VOICE
     
     url = API_URL.format(voice_id=voice_id)
     headers = {
