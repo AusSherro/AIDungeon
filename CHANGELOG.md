@@ -1,5 +1,78 @@
 # Changelog
 
+## [0.10.0] - 2025-12-06
+### Added
+- **Skill Check Resolution Loop**: Complete closed-loop skill check system with AI narration
+  - New `utils/skill_check_manager.py` module (600+ lines) with comprehensive check handling
+  - `SkillCheckRequest`, `SkillCheckResult`, `GroupCheckResult`, `PendingCheck` dataclasses
+  - `parse_skill_check_request()` with enhanced regex for skills, abilities, and saving throws
+  - Detection of group checks ("everyone roll", "the party must")
+  - `roll_skill_check()` with automatic advantage/disadvantage from conditions
+  - `resolve_group_check()` using majority rule (>50% success)
+  - `calculate_passive_score()` with 10 + modifiers + feat bonuses (Observant, etc.)
+  - Pending check state management for tracking awaiting responses
+- **Interactive Skill Check Prompts**: Button-based player prompts
+  - `SkillCheckRollButton` View with interactive 🎲 Roll button
+  - 60-second timeout with auto-roll option for unresponsive players
+  - Advantage/disadvantage automatically detected from character conditions
+  - Clear display of check type, DC, and modifiers
+- **Skill Check AI Narration**: GPT-4o narrates all check outcomes
+  - `narrate_skill_check_outcome()` for dramatic individual check narration
+  - `narrate_group_check_outcome()` for party-wide check results
+  - `narrate_passive_notice()` for subtle perception discoveries
+  - Results flow directly to AI for consequence narration
+- **New Skill Check Commands**:
+  - `/groupcheck <skill> [dc]` - Request group skill check from all players
+  - `/savingthrow <ability> <dc> [player]` - Request saving throw from player(s)
+  - `/passivecheck <dc> <description>` - DM tool to secretly check passive perception
+- **v1.0 "Playable Automation" Milestone Complete**: All Phase 1-3 goals achieved
+
+### Changed
+- `/do` command now uses enhanced skill check detection with button prompts
+- `/roll` command integrates with pending check system for AI narration flow
+- Skill checks detected in AI narration now trigger interactive player prompts
+- Roll results automatically re-injected to AI for consequence narration
+
+## [0.9.0] - 2025-12-06
+### Added
+- **Combat Flow Auto-Advance System**: Complete turn automation and pacing
+  - New `utils/combat_flow.py` module (600+ lines) with comprehensive combat flow management
+  - `CombatTimerManager` class for configurable turn timeouts (default 60s)
+  - Warning ping at 30s remaining via async callbacks
+  - Auto-pass on timeout with defensive action selection (Dodge/Disengage)
+  - `/turntimer` command to configure timeout and warning per channel
+  - `/timeleft` command to check remaining time on current turn
+- **Turn Start Automation**: Rich turn announcements
+  - `build_turn_announcement()` with HP, conditions, and action summary
+  - Player pings with full combat context
+  - Quick action suggestions based on character state
+  - Available movement, action, bonus action, reaction display
+- **End-of-Round Processing**: Automatic effect resolution
+  - `process_end_of_turn_effects()` for condition duration countdown
+  - `process_start_of_turn_effects()` for ongoing damage (poison, fire, bleed)
+  - `process_round_transition()` for regeneration and ability recharge
+  - Automatic concentration check prompts when damage taken
+  - Condition expiration notifications
+- **Combat End Detection**: Victory and defeat handling
+  - `check_combat_end()` with `CombatEndReason` enum (Victory, TPK, Fled, Surrendered)
+  - Automatic combat resolution when all enemies/players defeated
+  - `CombatEndResult` dataclass with XP, loot, and narrative hooks
+- **Post-Combat Automation**: Session flow continuation
+  - `process_post_combat()` for XP calculation and distribution
+  - Loot generation prompts for defeated enemies
+  - Short rest opportunity offers
+  - Victory/defeat narrative suggestions
+
+### Changed
+- `/fight` command now initializes turn timer for player turns
+- `/nextturn` command now uses enhanced turn announcements with timer
+- `/nextturn` processes end-of-round effects automatically on round transition
+- `/nextturn` checks for combat end conditions after each turn
+- `/attack` command now cancels timer on action and checks for victory
+- `/cast` command now cancels timer on spell cast
+- `/endcombat` command now processes post-combat automation (XP, loot, rest offer)
+- `/combatinfo` enhanced with timer display, health icons, and type indicators
+
 ## [0.8.0] - 2025-12-06
 ### Added
 - **Enemy AI Turn Automation**: Complete AI-driven enemy behavior system

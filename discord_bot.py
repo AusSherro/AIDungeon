@@ -13,11 +13,15 @@ import asyncio
 import tempfile
 import zipfile
 import json
-from typing import Optional
+from typing import Optional, Dict
 from dotenv import load_dotenv
 from config import Config
 
-from services.openai_service import get_dm_response, generate_campaign, summarize_history, generate_campaign_summary, extract_npcs_and_quests, narrate_enemy_action, narrate_legendary_action, narrate_lair_action
+from services.openai_service import (
+    get_dm_response, generate_campaign, summarize_history, generate_campaign_summary,
+    extract_npcs_and_quests, narrate_enemy_action, narrate_legendary_action, narrate_lair_action,
+    narrate_skill_check_outcome, narrate_group_check_outcome, narrate_passive_notice
+)
 from services.elevenlabs_service import text_to_speech_async
 from utils.voice_parser import extract_voice_tag, clean_text, clean_for_tts
 from utils.voice_map import get_voice_id
@@ -80,6 +84,13 @@ from utils.enemy_ai import (
     should_use_legendary_action, process_lair_actions,
     get_enemy_profile
 )
+from utils.combat_flow import (
+    combat_timer, CombatTimerManager, CombatFlowConfig,
+    process_end_of_turn_effects, process_start_of_turn_effects,
+    process_round_transition, check_combat_end, CombatEndReason,
+    build_turn_announcement, execute_auto_pass, get_combat_status_summary,
+    process_post_combat
+)
 from utils.handout_manager import (
     create_handout, get_handout, get_handouts_for_player,
     get_all_handouts, reveal_handout, share_handout_with,
@@ -111,6 +122,15 @@ from utils.reaction_manager import (
     get_available_reactions, format_reaction_prompt, ReactionType
 )
 from utils.voice_map import get_voice_for_npc, extract_npc_from_tag
+from utils.skill_check_manager import (
+    parse_skill_check_request, SkillCheckRequest, SkillCheckResult,
+    roll_skill_check, resolve_group_check, GroupCheckResult,
+    calculate_passive_score, check_passive_perception, check_passive_insight,
+    create_pending_check, get_pending_check, add_check_result, complete_pending_check,
+    clear_pending_check, is_check_pending, get_missing_players,
+    format_check_result, format_group_check_result, build_roll_prompt,
+    CheckType, PendingCheck
+)
 
 load_dotenv()
 Config.validate()
@@ -123,6 +143,338 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Voice client manager
 voice_manager = VoiceClientManager()
+
+# Store active channel references for timer callbacks
+_active_channels: Dict[str, discord.TextChannel] = {}
+
+
+# =============================================================================
+# COMBAT TIMER CALLBACKS
+# =============================================================================
+
+async def on_turn_warning(channel_id: str, player_id: str, seconds_remaining: int):
+    """Called when a player's turn timer is running low."""
+    channel = _active_channels.get(channel_id)
+    if not channel:
+        return
+    
+    await channel.send(
+        f"⏰ <@{player_id}>, you have **{seconds_remaining} seconds** remaining!\n"
+        f"Use `/attack`, `/cast`, `/do`, or `/nextturn` to complete your turn."
+    )
+
+
+async def on_turn_timeout(channel_id: str, combatant_name: str):
+    """Called when a player's turn times out - auto-pass with Dodge action."""
+    channel = _active_channels.get(channel_id)
+    if not channel:
+        return
+    
+    # Execute auto-pass (Dodge action)
+    result = execute_auto_pass(channel_id, combatant_name)
+    
+    if result.get('error'):
+        return
+    
+    await channel.send(result['message'])
+    
+    # Advance to next turn
+    state = next_turn(channel_id)
+    if state:
+        current = state['turn_order'][state['current_turn']]
+        
+        # Check if next is an enemy and auto-execute
+        if current.get('type') == 'enemy' and CombatFlowConfig.AUTO_EXECUTE_ENEMY_TURNS:
+            # We need a fake interaction for enemy turn execution
+            # For now, just announce - full enemy execution needs interaction context
+            await channel.send(f"⚔️ **{current['name']}** is up next...")
+        else:
+            # Player turn - send announcement and start timer
+            announcement = build_turn_announcement(channel_id, current)
+            await channel.send(announcement['message'])
+            
+            # Start new timer
+            await combat_timer.start_turn_timer(
+                channel_id,
+                current['name'],
+                current.get('id', '')
+            )
+
+
+async def setup_timer_callbacks(channel_id: str, channel: discord.TextChannel):
+    """Set up timer callbacks for a channel."""
+    _active_channels[channel_id] = channel
+    combat_timer.set_callbacks(channel_id, on_turn_warning, on_turn_timeout)
+
+
+# =============================================================================
+# SKILL CHECK CONFIGURATION AND BUTTON VIEW
+# =============================================================================
+
+class SkillCheckConfig:
+    """Configuration for skill check handling."""
+    ROLL_TIMEOUT_SECONDS = 60  # Time to wait for player rolls
+    AUTO_ROLL_ON_TIMEOUT = True  # Auto-roll if player doesn't respond
+    NARRATE_OUTCOMES = True  # Use AI to narrate outcomes
+    CHECK_PASSIVE_PERCEPTION = True  # Auto-check passive perception
+    GROUP_CHECK_MAJORITY = 0.5  # Fraction needed for group success (0.5 = majority)
+
+
+class SkillCheckRollButton(discord.ui.View):
+    """Button view for skill check rolls."""
+    
+    def __init__(self, channel_id: str, player_ids: list, skill: str, 
+                 dc: int = None, timeout: int = 60):
+        super().__init__(timeout=timeout)
+        self.channel_id = channel_id
+        self.player_ids = player_ids
+        self.skill = skill
+        self.dc = dc
+        self.rolled_players = set()
+        self._message = None
+    
+    async def on_timeout(self):
+        """Handle timeout - auto-roll for players who didn't respond."""
+        if not SkillCheckConfig.AUTO_ROLL_ON_TIMEOUT:
+            return
+        
+        pending = get_pending_check(self.channel_id)
+        if not pending:
+            return
+        
+        # Auto-roll for missing players
+        missing = get_missing_players(self.channel_id)
+        for player_id in missing:
+            char = load_character(player_id)
+            if not char:
+                continue
+            
+            result = roll_skill_check(
+                player_id,
+                char.get('name', 'Unknown'),
+                char,
+                pending.request
+            )
+            add_check_result(self.channel_id, player_id, result)
+        
+        # Disable the button
+        for item in self.children:
+            item.disabled = True
+        
+        if self._message:
+            try:
+                await self._message.edit(view=self)
+            except:
+                pass
+    
+    @discord.ui.button(label="🎲 Roll", style=discord.ButtonStyle.primary, custom_id="skill_roll")
+    async def roll_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Handle roll button press."""
+        player_id = str(interaction.user.id)
+        
+        # Check if this player should roll
+        if player_id not in self.player_ids:
+            await interaction.response.send_message(
+                "This roll isn't for you!", ephemeral=True
+            )
+            return
+        
+        # Check if already rolled
+        if player_id in self.rolled_players:
+            await interaction.response.send_message(
+                "You've already rolled!", ephemeral=True
+            )
+            return
+        
+        # Get pending check
+        pending = get_pending_check(self.channel_id)
+        if not pending:
+            await interaction.response.send_message(
+                "This check has expired.", ephemeral=True
+            )
+            return
+        
+        # Get character and roll
+        char = load_character(player_id)
+        if not char:
+            await interaction.response.send_message(
+                "You need a character to roll!", ephemeral=True
+            )
+            return
+        
+        result = roll_skill_check(
+            player_id,
+            char.get('name', 'Unknown'),
+            char,
+            pending.request
+        )
+        
+        # Add result and mark as rolled
+        self.rolled_players.add(player_id)
+        all_done = add_check_result(self.channel_id, player_id, result)
+        
+        # Send roll result
+        result_msg = format_check_result(result)
+        await interaction.response.send_message(result_msg)
+        
+        # Check if all players have rolled
+        if all_done:
+            # Disable button
+            button.disabled = True
+            if self._message:
+                try:
+                    await self._message.edit(view=self)
+                except:
+                    pass
+            
+            # Process results
+            await process_completed_skill_check(
+                interaction.channel,
+                self.channel_id
+            )
+
+
+async def process_completed_skill_check(channel: discord.TextChannel, channel_id: str):
+    """Process a completed skill check and generate AI narration."""
+    pending = complete_pending_check(channel_id)
+    if not pending:
+        return
+    
+    state = load_state(channel_id)
+    
+    # Check if this was a group check
+    if pending.request.is_group_check:
+        results = list(pending.results.values())
+        group_result = resolve_group_check(results, pending.request.dc)
+        
+        # Format result
+        result_msg = format_group_check_result(group_result)
+        await channel.send(result_msg)
+        
+        # AI narration if enabled
+        if SkillCheckConfig.NARRATE_OUTCOMES:
+            try:
+                individual = [(r.player_name, r.total, r.success) for r in results]
+                narration = await narrate_group_check_outcome(
+                    group_result.skill_or_ability,
+                    group_result.dc,
+                    group_result.successes,
+                    group_result.failures,
+                    group_result.group_success,
+                    individual,
+                    pending.request.context or "the group check"
+                )
+                await channel.send(f"*{narration}*")
+                
+                # TTS
+                voice_tag = extract_voice_tag(narration)
+                tts_text = clean_for_tts(narration)
+                # Note: We don't have an interaction here, so skip TTS
+            except Exception as e:
+                print(f"Group check narration error: {e}")
+    else:
+        # Single player check - get the one result
+        if pending.results:
+            result = list(pending.results.values())[0]
+            
+            # AI narration if enabled
+            if SkillCheckConfig.NARRATE_OUTCOMES and result.dc is not None:
+                try:
+                    narration = await narrate_skill_check_outcome(
+                        result.player_name,
+                        result.skill_or_ability,
+                        result.total,
+                        result.dc,
+                        result.success,
+                        result.natural_20,
+                        result.natural_1,
+                        pending.request.context or "the action"
+                    )
+                    await channel.send(f"**Outcome:**\n*{narration}*")
+                    
+                    # Update state to clear pending roll
+                    state['pending_roll'] = None
+                    save_state(channel_id, state)
+                except Exception as e:
+                    print(f"Skill check narration error: {e}")
+
+
+async def prompt_skill_check(
+    channel: discord.TextChannel,
+    channel_id: str,
+    request: SkillCheckRequest,
+    player_ids: list,
+    player_mentions: list
+):
+    """
+    Send a skill check prompt with roll button.
+    
+    Args:
+        channel: Discord channel to send to
+        channel_id: Channel ID string
+        request: The skill check request
+        player_ids: List of player IDs who should roll
+        player_mentions: List of player mentions (e.g., ["<@123>"])
+    """
+    # Create pending check
+    create_pending_check(channel_id, request, player_ids, SkillCheckConfig.ROLL_TIMEOUT_SECONDS)
+    
+    # Build prompt message
+    prompt_msg = build_roll_prompt(request, player_mentions)
+    
+    # Create button view
+    view = SkillCheckRollButton(
+        channel_id, 
+        player_ids, 
+        request.skill_or_ability,
+        request.dc,
+        SkillCheckConfig.ROLL_TIMEOUT_SECONDS
+    )
+    
+    # Send message with button
+    message = await channel.send(prompt_msg, view=view)
+    view._message = message
+
+
+async def check_and_prompt_passive_perception(
+    channel: discord.TextChannel,
+    channel_id: str,
+    hidden_dc: int,
+    hidden_description: str
+):
+    """
+    Check passive perception for all players and announce notices.
+    
+    Args:
+        channel: Discord channel
+        channel_id: Channel ID
+        hidden_dc: DC to notice the hidden thing
+        hidden_description: What's hidden
+    """
+    if not SkillCheckConfig.CHECK_PASSIVE_PERCEPTION:
+        return
+    
+    state = load_state(channel_id)
+    players = state.get('players', [])
+    
+    notices = []
+    for player_id in players:
+        char = load_character(player_id)
+        if not char:
+            continue
+        
+        passive = calculate_passive_score(char, 'perception')
+        if passive >= hidden_dc:
+            notices.append((char.get('name', 'Someone'), player_id, hidden_description))
+    
+    # Narrate notices
+    for name, player_id, what in notices:
+        try:
+            narration = await narrate_passive_notice(name, what, passive, hidden_dc)
+            await channel.send(narration)
+        except Exception as e:
+            print(f"Passive notice error: {e}")
+            await channel.send(f"👁️ **{name}** notices {what}.")
 
 
 async def play_tts(interaction, text: str, voice_tag: str = "Narrator"):
@@ -277,12 +629,68 @@ async def do_action(interaction: discord.Interaction, action: str):
         add_inventory(user_id, item)
         output += f"\n\n🎒 *{char_name} obtained: {item}*"
 
-    # Check if AI is asking for a skill check
-    pending = updated_state.get('pending_roll')
-    if pending and pending.get('skill'):
-        skill_name = pending['skill'].replace('_', ' ').title()
-        dc_text = f" (DC {pending['dc']})" if pending.get('dc') else ""
-        output += f"\n\n🎲 **Roll {skill_name}{dc_text}!** Use `/roll {pending['skill']}`"
+    # Check if AI is asking for a skill check - use enhanced detection
+    # Get character names for target detection
+    player_char_names = []
+    for pid in updated_state.get('turn_order', []):
+        pchar = load_character(pid)
+        if pchar:
+            player_char_names.append(pchar.get('name', ''))
+    
+    # Use enhanced skill check parsing
+    skill_check_request = parse_skill_check_request(narration, player_char_names)
+    
+    if skill_check_request:
+        # Store context for later
+        skill_check_request.context = action
+        
+        # Determine who should roll
+        if skill_check_request.is_group_check:
+            # Everyone rolls
+            target_player_ids = updated_state.get('turn_order', [user_id])
+        elif skill_check_request.target_players:
+            # Specific players named
+            target_player_ids = []
+            for pid in updated_state.get('turn_order', []):
+                pchar = load_character(pid)
+                if pchar and pchar.get('name', '') in skill_check_request.target_players:
+                    target_player_ids.append(pid)
+            if not target_player_ids:
+                target_player_ids = [user_id]
+        else:
+            # Default to the player who took the action
+            target_player_ids = [user_id]
+        
+        # Build mentions
+        player_mentions = [f"<@{pid}>" for pid in target_player_ids]
+        
+        # Add skill check prompt to output
+        skill_name = skill_check_request.skill_or_ability.replace('_', ' ').title()
+        dc_text = f" (DC {skill_check_request.dc})" if skill_check_request.dc else ""
+        
+        if skill_check_request.is_group_check:
+            output += f"\n\n🎲 **Everyone, roll {skill_name}{dc_text}!**"
+        else:
+            output += f"\n\n🎲 **Roll {skill_name}{dc_text}!**"
+        
+        # Update state with pending roll for backward compatibility
+        updated_state['pending_roll'] = {
+            'player_id': user_id,
+            'skill': skill_check_request.skill_or_ability,
+            'dc': skill_check_request.dc,
+            'action': action
+        }
+        
+        # We'll send the button prompt after the main message
+        skill_check_pending = (skill_check_request, target_player_ids, player_mentions)
+    else:
+        skill_check_pending = None
+        # Check old-style pending roll detection (fallback)
+        pending = updated_state.get('pending_roll')
+        if pending and pending.get('skill'):
+            skill_name = pending['skill'].replace('_', ' ').title()
+            dc_text = f" (DC {pending['dc']})" if pending.get('dc') else ""
+            output += f"\n\n🎲 **Roll {skill_name}{dc_text}!** Use `/roll {pending['skill']}`"
 
     # Check if AI triggered combat automatically
     pending_combat = updated_state.get('pending_combat')
@@ -343,6 +751,11 @@ async def do_action(interaction: discord.Interaction, action: str):
         updated_state['pending_combat'] = None
 
     await interaction.followup.send(output)
+    
+    # Send skill check button prompt if needed
+    if skill_check_pending:
+        request, target_ids, mentions = skill_check_pending
+        await prompt_skill_check(interaction.channel, channel_id, request, target_ids, mentions)
     
     # Play TTS (narration only, not the roll prompt)
     await play_tts(interaction, text, voice_tag)
@@ -772,8 +1185,68 @@ async def roll_cmd(interaction: discord.Interaction, dice: str, advantage: bool 
     await interaction.response.send_message(msg)
     log_message(channel_id, char_name, msg)
     
-    # If there was a pending roll, resolve it with the AI
+    # Check if there's a pending skill check from the button system
+    pending_check = get_pending_check(channel_id)
+    if pending_check and user_id in pending_check.players_needed:
+        # Build result for the pending check system
+        if skill in SKILLS or skill.upper() in ['STR','DEX','CON','INT','WIS','CHA']:
+            check_result = SkillCheckResult(
+                player_id=user_id,
+                player_name=char_name,
+                skill_or_ability=skill_name,
+                roll=result,
+                modifier=mod,
+                total=total,
+                dc=pending_check.request.dc or dc,
+                success=(result == 20) or (dc and total >= dc and result != 1),
+                natural_20=(result == 20),
+                natural_1=(result == 1),
+                advantage=advantage,
+                disadvantage=disadvantage,
+                rolls=[roll1, roll2] if (advantage or disadvantage) else [roll1]
+            )
+            
+            # Add result to pending check
+            all_done = add_check_result(channel_id, user_id, check_result)
+            
+            if all_done:
+                # All players have rolled - process the check
+                await process_completed_skill_check(interaction.channel, channel_id)
+                return  # Skip old-style pending roll handling
+    
+    # If there was a pending roll (old style), resolve it with the AI
     if pending and pending.get('player_id') == user_id and total is not None:
+        # Use new narration system if enabled
+        if SkillCheckConfig.NARRATE_OUTCOMES and dc:
+            try:
+                success = (result == 20) or (dc and total >= dc and result != 1)
+                narration = await narrate_skill_check_outcome(
+                    char_name,
+                    skill_name,
+                    total,
+                    dc,
+                    success,
+                    result == 20,
+                    result == 1,
+                    pending.get('action', 'the action')
+                )
+                
+                # Clear the pending roll
+                updated_state = state.copy()
+                updated_state['pending_roll'] = None
+                save_state(channel_id, updated_state)
+                
+                # Send the outcome
+                voice_tag = extract_voice_tag(narration)
+                text = clean_text(narration)
+                await interaction.followup.send(f"**Outcome:**\n{text}")
+                await play_tts(interaction, text, voice_tag)
+                log_message(channel_id, "DM", text)
+                return
+            except Exception as e:
+                print(f"Skill check narration error, falling back: {e}")
+        
+        # Fallback to old-style AI response
         await interaction.followup.send("*Resolving action...*", ephemeral=True)
         
         # Build result message for AI
@@ -796,6 +1269,192 @@ async def roll_cmd(interaction: discord.Interaction, dice: str, advantage: bool 
         await interaction.followup.send(f"**Outcome:**\n{text}")
         await play_tts(interaction, text, voice_tag)
         log_message(channel_id, "DM", text)
+
+
+# Skill check choices for autocomplete
+SKILL_CHOICES = [
+    app_commands.Choice(name=skill.replace('_', ' ').title(), value=skill)
+    for skill in ['acrobatics', 'animal_handling', 'arcana', 'athletics', 'deception',
+                  'history', 'insight', 'intimidation', 'investigation', 'medicine',
+                  'nature', 'perception', 'performance', 'persuasion', 'religion',
+                  'sleight_of_hand', 'stealth', 'survival']
+]
+
+ABILITY_CHOICES = [
+    app_commands.Choice(name="Strength", value="strength"),
+    app_commands.Choice(name="Dexterity", value="dexterity"),
+    app_commands.Choice(name="Constitution", value="constitution"),
+    app_commands.Choice(name="Intelligence", value="intelligence"),
+    app_commands.Choice(name="Wisdom", value="wisdom"),
+    app_commands.Choice(name="Charisma", value="charisma"),
+]
+
+
+@bot.tree.command(name="groupcheck", description="Request a group skill check from all players")
+@app_commands.describe(
+    skill="Skill to check",
+    dc="Difficulty class (optional)"
+)
+@app_commands.choices(skill=SKILL_CHOICES)
+async def group_check_cmd(
+    interaction: discord.Interaction,
+    skill: str,
+    dc: Optional[int] = None
+):
+    """Request a group skill check from all party members."""
+    channel_id = str(interaction.channel.id)
+    state = load_state(channel_id)
+    
+    if not state.get("campaign_title"):
+        await interaction.response.send_message("No campaign running. Use `/campaign` to start one!")
+        return
+    
+    players = state.get('players', [])
+    if not players:
+        await interaction.response.send_message("No players in the campaign!", ephemeral=True)
+        return
+    
+    # Build skill check request
+    request = SkillCheckRequest(
+        check_type=CheckType.SKILL,
+        skill_or_ability=skill,
+        dc=dc,
+        is_group_check=True,
+        context="group skill check"
+    )
+    
+    # Build mentions
+    player_mentions = [f"<@{pid}>" for pid in players]
+    
+    skill_name = skill.replace('_', ' ').title()
+    dc_text = f" (DC {dc})" if dc else ""
+    
+    await interaction.response.send_message(
+        f"📋 **Group {skill_name} Check{dc_text}**\n"
+        f"Everyone in the party needs to roll!"
+    )
+    
+    # Send button prompt
+    await prompt_skill_check(interaction.channel, channel_id, request, players, player_mentions)
+
+
+@bot.tree.command(name="savingthrow", description="Request a saving throw")
+@app_commands.describe(
+    ability="Ability for the save",
+    dc="Difficulty class",
+    player="Specific player (leave blank for all)"
+)
+@app_commands.choices(ability=ABILITY_CHOICES)
+async def saving_throw_cmd(
+    interaction: discord.Interaction,
+    ability: str,
+    dc: int,
+    player: Optional[discord.Member] = None
+):
+    """Request a saving throw from one or all players."""
+    channel_id = str(interaction.channel.id)
+    state = load_state(channel_id)
+    
+    if not state.get("campaign_title"):
+        await interaction.response.send_message("No campaign running. Use `/campaign` to start one!")
+        return
+    
+    # Determine who should roll
+    if player:
+        target_ids = [str(player.id)]
+        player_mentions = [f"<@{player.id}>"]
+        is_group = False
+    else:
+        target_ids = state.get('players', [])
+        player_mentions = [f"<@{pid}>" for pid in target_ids]
+        is_group = len(target_ids) > 1
+    
+    if not target_ids:
+        await interaction.response.send_message("No players to roll!", ephemeral=True)
+        return
+    
+    # Build saving throw request
+    request = SkillCheckRequest(
+        check_type=CheckType.SAVING_THROW,
+        skill_or_ability=ability,
+        dc=dc,
+        is_group_check=is_group,
+        context=f"{ability.title()} saving throw"
+    )
+    
+    ability_name = ability.title()
+    
+    if is_group:
+        await interaction.response.send_message(
+            f"⚡ **{ability_name} Saving Throw (DC {dc})**\n"
+            f"Everyone make a save!"
+        )
+    else:
+        char = load_character(str(player.id))
+        char_name = char.get('name', player.display_name) if char else player.display_name
+        await interaction.response.send_message(
+            f"⚡ **{char_name}, make a {ability_name} Saving Throw (DC {dc})!**"
+        )
+    
+    # Send button prompt
+    await prompt_skill_check(interaction.channel, channel_id, request, target_ids, player_mentions)
+
+
+@bot.tree.command(name="passivecheck", description="Check all players' passive perception against a DC")
+@app_commands.describe(
+    dc="The DC to beat",
+    description="What's hidden (only revealed to those who notice)"
+)
+async def passive_check_cmd(
+    interaction: discord.Interaction,
+    dc: int,
+    description: str
+):
+    """DM tool: Check passive perception for all players."""
+    channel_id = str(interaction.channel.id)
+    state = load_state(channel_id)
+    
+    if not state.get("campaign_title"):
+        await interaction.response.send_message("No campaign running.", ephemeral=True)
+        return
+    
+    players = state.get('players', [])
+    if not players:
+        await interaction.response.send_message("No players in the campaign!", ephemeral=True)
+        return
+    
+    # Check each player's passive perception
+    notices = []
+    for player_id in players:
+        char = load_character(player_id)
+        if not char:
+            continue
+        
+        passive = calculate_passive_score(char, 'perception')
+        if passive >= dc:
+            notices.append((char.get('name', 'Someone'), player_id, passive))
+    
+    await interaction.response.defer()
+    
+    if notices:
+        # Send notices
+        for name, player_id, passive in notices:
+            try:
+                narration = await narrate_passive_notice(name, description, passive, dc)
+                await interaction.channel.send(narration)
+            except Exception as e:
+                print(f"Passive notice error: {e}")
+                await interaction.channel.send(f"👁️ **{name}** notices {description}.")
+        
+        await interaction.followup.send(
+            f"*{len(notices)} player(s) noticed something (DC {dc})*",
+            ephemeral=True
+        )
+    else:
+        await interaction.followup.send(
+            f"*No one noticed (DC {dc}). Highest passive: {max([calculate_passive_score(load_character(pid), 'perception') for pid in players if load_character(pid)])}*",
+            ephemeral=True
+        )
 
 
 # =============================================================================
@@ -878,11 +1537,24 @@ async def fight_start(interaction: discord.Interaction, enemies: str):
         f"**Enemies:** {enemy_names}\n\n"
         f"**Initiative Order:**\n" + "\n".join(f"• {o}" for o in order_display) + "\n\n"
         f"───────────────────────\n"
-        f"🎯 **{first['name']}**, you're up! Use `/attack` or `/do` for your action."
+        f"🎯 **{first['name']}**, you're up! Use `/attack` or `/do` for your action.\n"
+        f"⏰ *Turn timer: {CombatFlowConfig.TURN_TIMEOUT_SECONDS} seconds*"
     )
     
     await interaction.response.send_message(msg)
     log_message(channel_id, "DM", f"Combat started: {enemy_names}")
+    
+    # Set up timer callbacks for this channel
+    await setup_timer_callbacks(channel_id, interaction.channel)
+    
+    # If first combatant is a player, start their turn timer
+    if first.get('type') == 'player' and first.get('id'):
+        await combat_timer.start_turn_timer(
+            channel_id,
+            first['name'],
+            first['id']
+        )
+    
     await play_tts(interaction, f"Roll for initiative! {first['name']}, you're up first!", "Narrator")
 
 
@@ -893,6 +1565,9 @@ async def attack_cmd(interaction: discord.Interaction, target: str, bonus: int, 
     channel_id = str(interaction.channel.id)
     char = load_character(str(interaction.user.id))
     char_name = char.get('name', interaction.user.display_name) if char else interaction.user.display_name
+    
+    # Player took action - cancel their turn timer
+    await combat_timer.cancel_timer(channel_id)
     
     result = attack(channel_id, str(interaction.user.id), target, bonus, damage)
     
@@ -913,6 +1588,11 @@ async def attack_cmd(interaction: discord.Interaction, target: str, bonus: int, 
     # Check if target is down
     if result['target_hp'] == 0:
         msg += f"\n💀 **{target}** is down!"
+        
+        # Check for combat end after a kill
+        end_check = check_combat_end(channel_id)
+        if end_check.should_end and end_check.reason == CombatEndReason.VICTORY:
+            msg += f"\n\n🎉 **Victory!** All enemies have been defeated! Use `/endcombat` to collect rewards."
     
     await interaction.response.send_message(msg)
     log_message(channel_id, char_name, msg)
@@ -933,21 +1613,45 @@ async def combat_info(interaction: discord.Interaction):
         await interaction.response.send_message("No active combat.", ephemeral=True)
         return
     
-    # Build turn order display
+    # Build turn order display with enhanced status info
     turn_display = []
     for i, c in enumerate(status['turn_order']):
-        hp_str = f"{c['hp']}/{c.get('max_hp', c['hp'])}"
+        hp = c.get('hp', 0)
+        max_hp = c.get('max_hp', hp)
+        hp_pct = hp / max_hp if max_hp > 0 else 0
+        
+        # Health indicator
+        if hp <= 0:
+            health_icon = "💀"
+        elif hp_pct <= 0.25:
+            health_icon = "❤️"
+        elif hp_pct <= 0.5:
+            health_icon = "💛"
+        else:
+            health_icon = "💚"
+        
         indicator = "▶️ " if i == status['current_index'] else "   "
         status_str = f" [{', '.join(c['status'])}]" if c.get('status') else ""
-        turn_display.append(f"{indicator}**{c['name']}** - HP: {hp_str}{status_str}")
+        
+        # Type indicator
+        type_icon = "👤" if c.get('type') == 'player' else "👹"
+        
+        turn_display.append(
+            f"{indicator}{type_icon} **{c['name']}** - {health_icon} {hp}/{max_hp}{status_str}"
+        )
     
     current = status['current_combatant']
+    
+    # Timer info
+    remaining = combat_timer.get_remaining_time(channel_id)
+    timer_str = f"\n⏰ Time remaining: **{remaining}s**" if remaining else ""
+    
     output = (
         f"⚔️ **COMBAT** - Round {status['round']}\n"
         f"───────────────────────\n"
         + "\n".join(turn_display) + "\n"
         f"───────────────────────\n"
-        f"Current turn: **{current['name']}**"
+        f"Current turn: **{current['name']}**{timer_str}"
     )
     
     await interaction.response.send_message(output)
@@ -958,10 +1662,35 @@ async def next_turn_cmd(interaction: discord.Interaction):
     """Move to the next turn in combat, auto-executing enemy turns."""
     channel_id = str(interaction.channel.id)
     
+    # Cancel any active turn timer (player took action before timeout)
+    await combat_timer.cancel_timer(channel_id)
+    
     # Check for lair actions at initiative 20 (start of round)
     combat = load_combat(channel_id)
+    if not combat or not combat.get('active'):
+        await interaction.response.send_message("No active combat.", ephemeral=True)
+        return
+    
+    # Process end-of-turn effects for the current combatant
+    current_turn_idx = combat.get('current_turn', 0)
+    turn_order = combat.get('turn_order', [])
+    if turn_order:
+        current_combatant = turn_order[current_turn_idx]
+        end_of_turn_result = process_end_of_turn_effects(channel_id, current_combatant)
+        if end_of_turn_result.narration:
+            await interaction.channel.send(f"📋 {end_of_turn_result.narration}")
+    
+    # Check if we're at the end of the round (about to loop back)
+    if current_turn_idx == len(turn_order) - 1:
+        round_result = process_round_transition(channel_id)
+        if round_result.get('effects'):
+            effect_lines = [f"📋 {e['effect']}" for e in round_result['effects']]
+            if effect_lines:
+                await interaction.channel.send("\n".join(effect_lines))
+    
+    # Check for lair actions at initiative 20 (start of round)
+    combat = load_combat(channel_id)  # Reload after potential updates
     if combat and combat.get('lair_actions') and combat.get('current_turn', 0) == 0:
-        # Check if it's a new round and we haven't done lair action yet
         if not combat.get('lair_action_used_this_round'):
             await process_and_send_lair_action(interaction, channel_id, combat)
     
@@ -973,6 +1702,11 @@ async def next_turn_cmd(interaction: discord.Interaction):
     
     current = state['turn_order'][state['current_turn']]
     
+    # Process start-of-turn effects
+    start_result = process_start_of_turn_effects(channel_id, current)
+    if start_result.narration:
+        await interaction.channel.send(f"📋 {start_result.narration}")
+    
     # Reset reactions for the combatant whose turn just started
     reset_reactions(channel_id, current['name'])
     
@@ -980,24 +1714,36 @@ async def next_turn_cmd(interaction: discord.Interaction):
     if current.get('legendary_actions'):
         reset_legendary_actions(channel_id, current['name'])
     
+    # Check for combat end before continuing
+    end_check = check_combat_end(channel_id)
+    if end_check.should_end:
+        await interaction.response.send_message(end_check.summary)
+        if end_check.reason == CombatEndReason.VICTORY:
+            await interaction.followup.send("Use `/endcombat` to collect rewards and end the encounter.")
+        return
+    
     # Check if it's an enemy's turn - auto-execute!
     if current.get('type') == 'enemy':
         await interaction.response.defer()
         await execute_and_narrate_enemy_turn(interaction, channel_id, current, state)
     else:
-        # Player turn
-        player_id = current.get('id')
-        char = load_character(player_id)
-        hp_str = f"{current.get('hp', '?')}/{current.get('max_hp', '?')}"
-        status_effects = current.get('status', [])
-        status_str = f" | Status: {', '.join(status_effects)}" if status_effects else ""
+        # Player turn - use enhanced turn announcement
+        announcement = build_turn_announcement(channel_id, current)
         
         await interaction.response.send_message(
-            f"➡️ <@{player_id}> (**{current['name']}**), it's your turn!\n"
-            f"❤️ HP: {hp_str}{status_str}\n"
-            f"Use `/attack` to strike, `/cast` to cast spells, or `/do` for other actions."
+            announcement['message'] + f"\n⏰ *Timer: {CombatFlowConfig.TURN_TIMEOUT_SECONDS}s*"
         )
-        await play_tts(interaction, f"{current['name']}, it's your turn!", "Narrator")
+        
+        # Start turn timer for this player
+        if current.get('id'):
+            await setup_timer_callbacks(channel_id, interaction.channel)
+            await combat_timer.start_turn_timer(
+                channel_id,
+                current['name'],
+                current['id']
+            )
+        
+        await play_tts(interaction, announcement['tts_text'], "Narrator")
 
 
 async def execute_and_narrate_enemy_turn(interaction: discord.Interaction, 
@@ -1087,44 +1833,50 @@ async def execute_and_narrate_enemy_turn(interaction: discord.Interaction,
     
     log_message(channel_id, enemy['name'], narration)
     
-    # Check if combat should continue
-    players_alive = any(c.get('type') == 'player' and c.get('hp', 0) > 0 
-                       for c in updated_combat.get('combatants', []))
-    enemies_alive = any(c.get('type') == 'enemy' and c.get('hp', 0) > 0 
-                       for c in updated_combat.get('combatants', []))
-    
-    if not players_alive:
-        await interaction.followup.send("💀 **TPK! All players have fallen...**")
-        return
-    
-    if not enemies_alive:
-        await interaction.followup.send("🎉 **Victory!** All enemies have been defeated! Use `/endcombat` to collect rewards.")
+    # Check if combat should end using the new combat flow system
+    end_check = check_combat_end(channel_id)
+    if end_check.should_end:
+        await interaction.followup.send(end_check.summary)
+        if end_check.reason == CombatEndReason.VICTORY:
+            await interaction.followup.send("Use `/endcombat` to collect rewards and end the encounter.")
         return
     
     # Auto-advance to next turn
-    await asyncio.sleep(1)  # Brief pause for readability
+    await asyncio.sleep(CombatFlowConfig.DELAY_BETWEEN_ENEMY_TURNS)  # Configurable pause for readability
     
     next_state = next_turn(channel_id)
     if next_state:
         next_combatant = next_state['turn_order'][next_state['current_turn']]
         
+        # Process start-of-turn effects for next combatant
+        start_result = process_start_of_turn_effects(channel_id, next_combatant)
+        if start_result.narration:
+            await interaction.followup.send(f"📋 {start_result.narration}")
+        
         if next_combatant.get('type') == 'enemy':
             # Another enemy - recursively execute their turn
             await execute_and_narrate_enemy_turn(interaction, channel_id, next_combatant, next_state)
         else:
-            # Player's turn
-            player_id = next_combatant.get('id')
-            hp_str = f"{next_combatant.get('hp', '?')}/{next_combatant.get('max_hp', '?')}"
+            # Player's turn - use enhanced turn announcement
+            announcement = build_turn_announcement(channel_id, next_combatant)
             
-            # Check for legendary actions from enemies
+            # Check for legendary actions from enemies before player acts
             await check_legendary_actions(interaction, channel_id, next_state)
             
             await interaction.followup.send(
-                f"➡️ <@{player_id}> (**{next_combatant['name']}**), it's your turn!\n"
-                f"❤️ HP: {hp_str}\n"
-                f"Use `/attack`, `/cast`, or `/do` for your action."
+                announcement['message'] + f"\n⏰ *Timer: {CombatFlowConfig.TURN_TIMEOUT_SECONDS}s*"
             )
-            await play_tts(interaction, f"{next_combatant['name']}, you're up!", "Narrator")
+            
+            # Start turn timer for this player
+            if next_combatant.get('id'):
+                await setup_timer_callbacks(channel_id, interaction.channel)
+                await combat_timer.start_turn_timer(
+                    channel_id,
+                    next_combatant['name'],
+                    next_combatant['id']
+                )
+            
+            await play_tts(interaction, announcement['tts_text'], "Narrator")
 
 
 async def check_legendary_actions(interaction: discord.Interaction, 
@@ -1205,57 +1957,49 @@ async def end_combat_cmd(interaction: discord.Interaction):
     """End the combat encounter and award XP."""
     channel_id = str(interaction.channel.id)
     
-    # Get combat info before ending for XP calculation
-    combat = load_combat(channel_id)
-    xp_awarded = 0
-    loot_generated = None
-    level_ups = []
+    # Cancel any active turn timer
+    await combat_timer.cancel_timer(channel_id)
     
-    if combat and combat.get('combatants'):
-        # Calculate XP from defeated enemies
-        defeated_enemies = [c for c in combat['combatants'] 
-                          if c.get('type') == 'enemy' and c.get('hp', 0) <= 0]
-        
-        if defeated_enemies:
-            xp_awarded = calculate_combat_xp(defeated_enemies)
-            
-            # Get players for XP distribution
-            state = load_state(channel_id)
-            players = state.get('players', [])
-            
-            if players and xp_awarded > 0:
-                results = award_party_xp(players, xp_awarded, equal_split=True)
-                level_ups = [r['character'] for r in results if r.get('level_up')]
-            
-            # Generate loot from the toughest enemy
-            if defeated_enemies:
-                best_enemy = max(defeated_enemies, key=lambda e: e.get('xp', 0))
-                cr = int(str(best_enemy.get('cr', '1')).replace('/', '.').split('.')[0]) if best_enemy.get('cr') else 1
-                loot_generated = generate_enemy_loot(best_enemy['name'], cr)
+    # Get combat info before ending
+    combat = load_combat(channel_id)
+    if not combat:
+        await interaction.response.send_message("No active combat to end.", ephemeral=True)
+        return
+    
+    # Get the combat end status
+    end_check = check_combat_end(channel_id)
+    
+    # Get players for post-combat processing
+    state = load_state(channel_id)
+    players = state.get('players', [])
+    
+    # Process post-combat (XP, loot, level-ups)
+    post_combat_result = process_post_combat(channel_id, players, end_check)
     
     # End the combat
     end_combat(channel_id)
     
     # Restore free-form mode
-    state = load_state(channel_id)
     state['in_combat'] = False
     state['free_form'] = True
     save_state(channel_id, state)
     
+    # Clean up channel reference
+    if channel_id in _active_channels:
+        del _active_channels[channel_id]
+    
     # Build response message
     lines = ["⚔️ **Combat has ended!**"]
     
-    if xp_awarded > 0:
-        lines.append(f"✨ **XP Earned:** {xp_awarded} (split among party)")
-        if level_ups:
-            lines.append(f"🎉 **Level Up:** {', '.join(level_ups)}! Use `/levelup` to apply!")
+    if post_combat_result.summary_lines:
+        lines.extend(post_combat_result.summary_lines)
     
-    if loot_generated:
+    if post_combat_result.loot:
         lines.append("")
-        lines.append(format_loot_display(loot_generated))
+        lines.append(format_loot_display(post_combat_result.loot))
     
     lines.append("")
-    lines.append("Back to free-form exploration. Anyone can `/do` actions.")
+    lines.append("🎭 Back to free-form exploration. Anyone can `/do` actions.")
     
     await interaction.response.send_message("\n".join(lines))
     await play_tts(interaction, "Combat has ended. What do you do now?", "Narrator")
@@ -1514,6 +2258,9 @@ async def cast_cmd(
     if not char:
         await interaction.response.send_message("Create a character first!", ephemeral=True)
         return
+    
+    # Player took action - cancel their turn timer
+    await combat_timer.cancel_timer(channel_id)
     
     char_name = char.get('name', 'Character')
     
@@ -2374,6 +3121,69 @@ async def turns_mode(interaction: discord.Interaction, mode: str):
         await interaction.response.send_message("🎭 **Free-form mode** - Anyone can `/do` actions anytime!")
     else:
         await interaction.response.send_message("📋 **Strict turn order** - Must follow turn order. Use `/done` to pass turn.")
+
+
+@bot.tree.command(name="turntimer", description="Configure combat turn timer")
+@app_commands.describe(
+    seconds="Turn timeout in seconds (30-300, or 0 to disable)",
+    warning="Seconds before timeout to show warning (default: 30)"
+)
+async def turn_timer_cmd(
+    interaction: discord.Interaction, 
+    seconds: int,
+    warning: Optional[int] = None
+):
+    """Configure the turn timer for combat encounters."""
+    if seconds < 0 or seconds > 300:
+        await interaction.response.send_message(
+            "Timer must be between 0 and 300 seconds. Use 0 to disable.", 
+            ephemeral=True
+        )
+        return
+    
+    # Update the config
+    CombatFlowConfig.TURN_TIMEOUT_SECONDS = seconds
+    if warning is not None:
+        CombatFlowConfig.WARNING_SECONDS = min(warning, seconds - 5) if seconds > 5 else 0
+    
+    if seconds == 0:
+        await interaction.response.send_message("⏰ **Turn timer disabled.** Players have unlimited time per turn.")
+    else:
+        warning_text = f" (warning at {CombatFlowConfig.WARNING_SECONDS}s)" if CombatFlowConfig.WARNING_SECONDS > 0 else ""
+        await interaction.response.send_message(
+            f"⏰ **Turn timer set to {seconds} seconds**{warning_text}\n"
+            f"*If a player doesn't act in time, they will automatically Dodge.*"
+        )
+
+
+@bot.tree.command(name="timeleft", description="Check remaining time on your turn")
+async def time_left_cmd(interaction: discord.Interaction):
+    """Check how much time is left on the current turn."""
+    channel_id = str(interaction.channel.id)
+    
+    remaining = combat_timer.get_remaining_time(channel_id)
+    
+    if remaining is None:
+        await interaction.response.send_message(
+            "⏰ No active turn timer.", 
+            ephemeral=True
+        )
+        return
+    
+    timer_state = combat_timer.get_timer_state(channel_id)
+    combatant_name = timer_state.combatant_name if timer_state else "Unknown"
+    
+    if remaining <= 30:
+        emoji = "⚠️"
+    elif remaining <= 60:
+        emoji = "⏰"
+    else:
+        emoji = "✅"
+    
+    await interaction.response.send_message(
+        f"{emoji} **{combatant_name}** has **{remaining} seconds** remaining.",
+        ephemeral=True
+    )
 
 
 @bot.tree.command(name="leave", description="Disconnect bot from voice")

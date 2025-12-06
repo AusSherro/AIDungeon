@@ -94,6 +94,13 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 | `/reaction` | Use your reaction (Shield, Counterspell, etc.) |
 | `/endcombat` | End combat (auto-awards XP and generates loot!) |
 
+### Skill Checks
+| Command | Description |
+|---------|-------------|
+| `/groupcheck <skill> [dc]` | Request group skill check from all players |
+| `/savingthrow <ability> <dc> [player]` | Request saving throw |
+| `/passivecheck <dc> <description>` | [DM] Secretly check passive perception |
+
 ### Loot & Treasure
 | Command | Description |
 |---------|-------------|
@@ -148,6 +155,34 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 | `/dmhandouts` | [DM] View all campaign handouts |
 | `/revealhandout` | [DM] Reveal handout to all |
 | `/sharehandout` | [DM] Share with specific player |
+
+---
+
+## 🎲 Skill Check Resolution
+
+The AI automatically detects skill check requests and prompts players with interactive buttons:
+
+### Features
+- **Auto-Detection**: AI asks "Roll Perception DC 15" → Player gets roll button
+- **Interactive Prompts**: 🎲 Roll button with 60-second timeout
+- **Advantage/Disadvantage**: Auto-detected from conditions (Invisible, Prone, etc.)
+- **AI Narration**: Roll results flow to GPT-4o for dramatic outcome narration
+- **Group Checks**: "Everyone roll Stealth" → Majority rule resolution
+- **Passive Perception**: DM can secretly check passive scores vs hidden DCs
+
+### Check Types Detected
+| Pattern | Example |
+|---------|----------|
+| Skill Check | "Roll Perception", "Make a Stealth check" |
+| Ability Check | "Roll Strength", "Make a Constitution check" |
+| Saving Throw | "Make a Dexterity save", "Roll a Wisdom saving throw" |
+| Group Check | "Everyone roll", "The party must make" |
+
+### Group Check Resolution
+Group checks use majority rule (>50% must succeed):
+- 4 players: Need 3 successes
+- 3 players: Need 2 successes
+- Ties favor the party
 
 ---
 

@@ -587,3 +587,186 @@ Keep it atmospheric but brief."""
     except Exception as e:
         print(f"Lair action narration error: {e}")
         return f"[Voice: Narrator] {description}"
+
+
+# =============================================================================
+# SKILL CHECK OUTCOME NARRATION
+# =============================================================================
+
+async def narrate_skill_check_outcome(
+    player_name: str,
+    skill_name: str,
+    total: int,
+    dc: int,
+    success: bool,
+    natural_20: bool,
+    natural_1: bool,
+    original_action: str,
+    context: dict = None
+) -> str:
+    """
+    Generate dramatic narration for a skill check outcome.
+    
+    Args:
+        player_name: Name of the character who rolled
+        skill_name: The skill or ability checked
+        total: Total roll result
+        dc: Difficulty class
+        success: Whether the check succeeded
+        natural_20: Was it a natural 20
+        natural_1: Was it a natural 1
+        original_action: What the player was attempting
+        context: Optional additional context
+    
+    Returns:
+        Dramatic narration of the outcome
+    """
+    # Build outcome description
+    if natural_20:
+        outcome_type = "critical success"
+        outcome_desc = "With remarkable skill and a touch of luck"
+    elif natural_1:
+        outcome_type = "critical failure"
+        outcome_desc = "Despite their best efforts, disaster strikes"
+    elif success:
+        outcome_type = "success"
+        outcome_desc = "With practiced skill"
+    else:
+        outcome_type = "failure"
+        outcome_desc = "Unfortunately"
+    
+    margin = abs(total - dc) if dc else 0
+    
+    prompt = f"""As a D&D Dungeon Master, narrate this skill check outcome in 2-3 vivid sentences.
+
+Character: {player_name}
+Skill Check: {skill_name}
+Attempting: {original_action}
+Roll Total: {total} vs DC {dc}
+Outcome: {outcome_type.upper()} (by {margin})
+
+Narrate what happens as a result of this {outcome_type}. Be specific about the consequences.
+{outcome_desc}. Do NOT ask for any additional rolls.
+Use [Voice: Narrator] or [Voice: {player_name}] tags as appropriate."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a D&D Dungeon Master narrating skill check outcomes. Be dramatic but concise. Describe specific consequences of success or failure. Never ask for more rolls in your narration."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=150,
+            temperature=0.8,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Skill check narration error: {e}")
+        # Fallback narration
+        if success:
+            return f"[Voice: Narrator] {player_name} succeeds at the {skill_name} check!"
+        else:
+            return f"[Voice: Narrator] {player_name} fails the {skill_name} check."
+
+
+async def narrate_group_check_outcome(
+    skill_name: str,
+    dc: int,
+    successes: int,
+    failures: int,
+    group_success: bool,
+    individual_results: list,
+    original_context: str
+) -> str:
+    """
+    Generate dramatic narration for a group skill check outcome.
+    
+    Args:
+        skill_name: The skill being checked
+        dc: Difficulty class
+        successes: Number of successes
+        failures: Number of failures
+        group_success: Whether the group succeeded overall
+        individual_results: List of (name, total, success) tuples
+        original_context: What triggered the group check
+    
+    Returns:
+        Dramatic narration of the group outcome
+    """
+    # Build individual results description
+    results_desc = ", ".join([
+        f"{name} ({'succeeded' if success else 'failed'})"
+        for name, total, success in individual_results
+    ])
+    
+    prompt = f"""As a D&D Dungeon Master, narrate this group skill check outcome in 2-3 sentences.
+
+Group Check: {skill_name} (DC {dc})
+Situation: {original_context}
+Individual Results: {results_desc}
+Successes: {successes}, Failures: {failures}
+Overall Outcome: {"SUCCESS" if group_success else "FAILURE"}
+
+Narrate what happens to the party as a whole. Mention how individual performances affected the outcome.
+Do NOT ask for any additional rolls.
+Use [Voice: Narrator] tag."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a D&D Dungeon Master narrating group skill check outcomes. Describe how the party's combined efforts led to success or failure. Be dramatic but concise."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=150,
+            temperature=0.8,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Group check narration error: {e}")
+        if group_success:
+            return f"[Voice: Narrator] Working together, the party succeeds at the {skill_name} check!"
+        else:
+            return f"[Voice: Narrator] Despite their efforts, the party fails the {skill_name} check."
+
+
+async def narrate_passive_notice(
+    player_name: str,
+    what_noticed: str,
+    passive_score: int,
+    hidden_dc: int
+) -> str:
+    """
+    Generate narration for when a player's passive perception notices something.
+    
+    Args:
+        player_name: Character who noticed
+        what_noticed: Description of what was noticed
+        passive_score: The character's passive perception
+        hidden_dc: DC that was beaten
+    
+    Returns:
+        Subtle narration of the discovery
+    """
+    prompt = f"""As a D&D Dungeon Master, subtly narrate that {player_name} notices something.
+
+{player_name}'s passive perception ({passive_score}) beat the DC ({hidden_dc}).
+What they noticed: {what_noticed}
+
+Write 1-2 sentences describing {player_name}'s realization. Make it feel natural, not mechanical.
+Do not mention the passive score or DC. Use [Voice: Narrator] tag."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a D&D Dungeon Master revealing information that a perceptive character notices. Be subtle and immersive. Don't break immersion by mentioning game mechanics."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=100,
+            temperature=0.7,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Passive notice narration error: {e}")
+        return f"[Voice: Narrator] {player_name} notices {what_noticed}."
