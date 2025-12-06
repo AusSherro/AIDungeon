@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.8.0] - 2025-12-06
+### Added
+- **Enemy AI Turn Automation**: Complete AI-driven enemy behavior system
+  - New `utils/enemy_ai.py` module (700+ lines) with tactical decision making
+  - Target selection based on threat scoring (HP%, concentration, healing abilities)
+  - Action selection prioritizing multiattack > recharge abilities > single attacks
+  - Spell selection for intelligent casters with slot management
+  - Movement AI for tactical positioning (melee approach, ranged maintain distance)
+  - 7 enemy behavior profiles: mindless, beast, humanoid_soldier, humanoid_brute, spellcaster, boss, support
+  - Monster-to-profile mapping for 50+ creature types
+  - Flee logic based on morale thresholds per profile
+- **Legendary Action Automation**: Reactive legendary actions between player turns
+  - `check_legendary_actions()` triggers after player attacks and spells
+  - `select_legendary_action()` chooses tactically appropriate legendary action
+  - Dramatic AI narration for legendary action execution
+- **Lair Action Processing**: Environmental effects at initiative count 20
+  - `process_lair_actions()` for boss lair effects
+  - AI-generated lair action narration
+- **AI Combat Narration**: GPT-4o narrates all enemy actions
+  - `narrate_enemy_action()` for dramatic combat descriptions
+  - `narrate_legendary_action()` for special legendary moments
+  - `narrate_lair_action()` for environmental effects
+  - Fallback narration when AI unavailable
+  - TTS voice output for all enemy actions
+
+### Changed
+- `/nextturn` command now auto-executes enemy turns and chains consecutive enemies
+- `/attack` command now checks for legendary action opportunities after player attacks
+- `/cast` command now checks for legendary action opportunities after spellcasting
+- Combat flow automatically applies damage from enemy attacks to targets
+
 ## [0.7.0] - 2025-12-06
 ### Added
 - **XP & Auto-Leveling System**: Automatic experience point tracking

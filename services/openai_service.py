@@ -399,3 +399,191 @@ Return empty arrays if nothing notable found."""
     except Exception as e:
         print(f"NPC/Quest extraction error: {e}")
         return {"npcs": [], "quests": []}
+
+
+# =============================================================================
+# ENEMY AI NARRATION
+# =============================================================================
+
+async def narrate_enemy_action(enemy_turn_result: dict, combat_context: dict = None) -> str:
+    """
+    Generate dramatic narration for enemy actions during combat.
+    
+    Args:
+        enemy_turn_result: Result from execute_enemy_turn() containing actions, damage, etc.
+        combat_context: Optional additional context about the combat situation
+    
+    Returns:
+        Dramatic narration string suitable for TTS
+    """
+    enemy_name = enemy_turn_result.get('enemy_name', 'The creature')
+    actions = enemy_turn_result.get('actions', [])
+    damage_dealt = enemy_turn_result.get('damage_dealt', 0)
+    targets_hit = enemy_turn_result.get('targets_hit', [])
+    movement = enemy_turn_result.get('movement', {})
+    context = enemy_turn_result.get('narration_context', {})
+    
+    # Build prompt for AI
+    action_descriptions = []
+    for action in actions:
+        if action.get('description'):
+            action_descriptions.append(action['description'])
+        elif action.get('type') == 'attack':
+            if action.get('hit'):
+                action_descriptions.append(
+                    f"Hits {action.get('target', 'a target')} for {action.get('damage', 0)} damage"
+                )
+            else:
+                action_descriptions.append(f"Misses {action.get('target', 'the attack')}")
+    
+    # Build the prompt
+    prompt = f"""As a D&D Dungeon Master, narrate this enemy's combat turn dramatically in 2-3 sentences.
+
+Enemy: {enemy_name}
+Enemy Type: {context.get('enemy_type', enemy_name)}
+HP Status: {context.get('hp_status', 'unknown')}
+
+Actions taken:
+{chr(10).join('- ' + a for a in action_descriptions) if action_descriptions else '- No actions'}
+
+Movement: {movement.get('description', 'None')}
+
+Total damage dealt: {damage_dealt}
+Targets affected: {', '.join(targets_hit) if targets_hit else 'None'}
+Critical hit: {'Yes!' if context.get('did_crit') else 'No'}
+Missed all attacks: {'Yes' if context.get('did_miss_all') else 'No'}
+
+Write immersive, dramatic narration from the DM's perspective. Describe the enemy's actions vividly.
+Use [Voice: {enemy_name}] tags for any sounds or battle cries the creature makes.
+Keep it concise but impactful."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a dramatic D&D Dungeon Master narrating combat. Keep narrations vivid but brief (2-3 sentences). Use [Voice: CharacterName] tags for creature sounds."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=200,
+            temperature=0.8,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Enemy narration error: {e}")
+        # Fallback to simple narration
+        return _generate_fallback_narration(enemy_turn_result)
+
+
+def _generate_fallback_narration(enemy_turn_result: dict) -> str:
+    """Generate simple fallback narration if AI fails."""
+    enemy_name = enemy_turn_result.get('enemy_name', 'The creature')
+    actions = enemy_turn_result.get('actions', [])
+    damage_dealt = enemy_turn_result.get('damage_dealt', 0)
+    targets_hit = enemy_turn_result.get('targets_hit', [])
+    
+    parts = []
+    
+    # Movement
+    movement = enemy_turn_result.get('movement', {})
+    if movement.get('description'):
+        parts.append(movement['description'])
+    
+    # Attacks
+    for action in actions:
+        if action.get('type') == 'flee':
+            return f"{enemy_name} turns and flees from combat!"
+        elif action.get('type') == 'dodge':
+            return f"{enemy_name} takes a defensive stance, ready to dodge attacks."
+        elif action.get('description'):
+            parts.append(action['description'])
+    
+    if not parts:
+        return f"{enemy_name} readies for combat."
+    
+    return " ".join(parts)
+
+
+async def narrate_legendary_action(enemy_name: str, action: dict, 
+                                    remaining: int, combat_context: dict = None) -> str:
+    """
+    Generate dramatic narration for a legendary action.
+    
+    Args:
+        enemy_name: Name of the legendary creature
+        action: The legendary action being used
+        remaining: Legendary actions remaining after this use
+        combat_context: Optional combat context
+    
+    Returns:
+        Dramatic narration string
+    """
+    action_name = action.get('name', 'Unknown Action')
+    action_desc = action.get('description', '')
+    cost = action.get('cost', 1)
+    
+    prompt = f"""As a D&D Dungeon Master, narrate this legendary action dramatically in 1-2 sentences.
+
+Legendary Creature: {enemy_name}
+Legendary Action: {action_name}
+Description: {action_desc}
+Cost: {cost} legendary action(s)
+Remaining after use: {remaining}
+
+This happens between player turns - make it feel sudden and powerful!
+Use [Voice: {enemy_name}] for any sounds or roars.
+Keep it brief but impactful."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a dramatic D&D Dungeon Master narrating legendary actions. These should feel powerful and sudden. Keep it to 1-2 sentences."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=100,
+            temperature=0.8,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Legendary action narration error: {e}")
+        return f"[Voice: {enemy_name}] {enemy_name} uses {action_name}! {action_desc}"
+
+
+async def narrate_lair_action(lair_action: dict, combat_context: dict = None) -> str:
+    """
+    Generate dramatic narration for a lair action.
+    
+    Args:
+        lair_action: The lair action being triggered
+        combat_context: Optional combat context
+    
+    Returns:
+        Dramatic narration string for the lair action
+    """
+    description = lair_action.get('description', 'The lair itself seems to attack!')
+    round_num = lair_action.get('round', 1)
+    
+    prompt = f"""As a D&D Dungeon Master, narrate this lair action dramatically in 1-2 sentences.
+
+Round: {round_num}
+Lair Action: {description}
+
+This happens at initiative count 20 - the very environment turns against the party!
+Make it feel environmental and ominous.
+Use [Voice: Narrator] for the narration.
+Keep it atmospheric but brief."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a D&D Dungeon Master narrating lair actions. These are environmental effects that feel like the dungeon itself is alive and hostile. Keep to 1-2 dramatic sentences."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=100,
+            temperature=0.8,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Lair action narration error: {e}")
+        return f"[Voice: Narrator] {description}"

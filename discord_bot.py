@@ -17,7 +17,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from config import Config
 
-from services.openai_service import get_dm_response, generate_campaign, summarize_history, generate_campaign_summary, extract_npcs_and_quests
+from services.openai_service import get_dm_response, generate_campaign, summarize_history, generate_campaign_summary, extract_npcs_and_quests, narrate_enemy_action, narrate_legendary_action, narrate_lair_action
 from services.elevenlabs_service import text_to_speech_async
 from utils.voice_parser import extract_voice_tag, clean_text, clean_for_tts
 from utils.voice_map import get_voice_id
@@ -71,7 +71,14 @@ from utils.character_manager import (
 from utils.combat_manager import (
     start_combat, roll_initiative, next_turn, 
     get_active_combatant, end_combat, attack,
-    get_combat_status, load_combat
+    get_combat_status, load_combat, save_combat,
+    use_legendary_action, reset_legendary_actions,
+    use_lair_action, damage_combatant
+)
+from utils.enemy_ai import (
+    execute_enemy_turn, select_legendary_action,
+    should_use_legendary_action, process_lair_actions,
+    get_enemy_profile
 )
 from utils.handout_manager import (
     create_handout, get_handout, get_handouts_for_player,
@@ -909,6 +916,11 @@ async def attack_cmd(interaction: discord.Interaction, target: str, bonus: int, 
     
     await interaction.response.send_message(msg)
     log_message(channel_id, char_name, msg)
+    
+    # Check for legendary action opportunities after player attacks
+    combat_state = load_combat(channel_id)
+    if combat_state:
+        await check_legendary_actions(interaction, channel_id, combat_state)
 
 
 @bot.tree.command(name="combatinfo", description="Show current combat status")
@@ -943,8 +955,16 @@ async def combat_info(interaction: discord.Interaction):
 
 @bot.tree.command(name="nextturn", description="Advance to next combatant's turn")
 async def next_turn_cmd(interaction: discord.Interaction):
-    """Move to the next turn in combat."""
+    """Move to the next turn in combat, auto-executing enemy turns."""
     channel_id = str(interaction.channel.id)
+    
+    # Check for lair actions at initiative 20 (start of round)
+    combat = load_combat(channel_id)
+    if combat and combat.get('lair_actions') and combat.get('current_turn', 0) == 0:
+        # Check if it's a new round and we haven't done lair action yet
+        if not combat.get('lair_action_used_this_round'):
+            await process_and_send_lair_action(interaction, channel_id, combat)
+    
     state = next_turn(channel_id)
     
     if not state:
@@ -956,18 +976,228 @@ async def next_turn_cmd(interaction: discord.Interaction):
     # Reset reactions for the combatant whose turn just started
     reset_reactions(channel_id, current['name'])
     
-    # Check if it's an enemy's turn
+    # Reset legendary actions if this is a legendary creature's turn
+    if current.get('legendary_actions'):
+        reset_legendary_actions(channel_id, current['name'])
+    
+    # Check if it's an enemy's turn - auto-execute!
     if current.get('type') == 'enemy':
-        await interaction.response.send_message(
-            f"➡️ **{current['name']}** (Enemy) takes their turn!\n"
-            f"*The DM controls this enemy. Use `/nextturn` again after their action.*"
-        )
+        await interaction.response.defer()
+        await execute_and_narrate_enemy_turn(interaction, channel_id, current, state)
     else:
+        # Player turn
         player_id = current.get('id')
+        char = load_character(player_id)
+        hp_str = f"{current.get('hp', '?')}/{current.get('max_hp', '?')}"
+        status_effects = current.get('status', [])
+        status_str = f" | Status: {', '.join(status_effects)}" if status_effects else ""
+        
         await interaction.response.send_message(
             f"➡️ <@{player_id}> (**{current['name']}**), it's your turn!\n"
-            f"Use `/attack` to strike or `/do` for other actions."
+            f"❤️ HP: {hp_str}{status_str}\n"
+            f"Use `/attack` to strike, `/cast` to cast spells, or `/do` for other actions."
         )
+        await play_tts(interaction, f"{current['name']}, it's your turn!", "Narrator")
+
+
+async def execute_and_narrate_enemy_turn(interaction: discord.Interaction, 
+                                          channel_id: str, enemy: dict, 
+                                          combat_state: dict):
+    """Execute an enemy's turn and narrate the results."""
+    # Execute the enemy AI
+    turn_result = execute_enemy_turn(channel_id, enemy, combat_state)
+    
+    # Apply damage to targets
+    for action in turn_result.get('actions', []):
+        if action.get('type') == 'attack' and action.get('hit'):
+            target_name = action.get('target')
+            damage = action.get('damage', 0)
+            damage_type = action.get('damage_type', 'bludgeoning')
+            if target_name and damage > 0:
+                damage_combatant(channel_id, target_name, damage, damage_type)
+    
+    # Generate AI narration
+    try:
+        narration = await narrate_enemy_action(turn_result, combat_state)
+    except Exception as e:
+        print(f"Narration error: {e}")
+        # Fallback narration from the turn result
+        narration = " ".join([a.get('description', '') for a in turn_result.get('actions', [])])
+        if not narration:
+            narration = f"{enemy['name']} takes their turn."
+    
+    # Build the combat message
+    lines = [f"⚔️ **{enemy['name']}'s Turn**"]
+    lines.append("───────────────────────")
+    
+    # Movement
+    movement = turn_result.get('movement', {})
+    if movement.get('description'):
+        lines.append(f"🏃 {movement['description']}")
+    
+    # Actions
+    for action in turn_result.get('actions', []):
+        if action.get('type') == 'attack':
+            if action.get('fumble'):
+                lines.append(f"💀 **Critical Miss!** {action.get('description', '')}")
+            elif action.get('crit'):
+                lines.append(f"🌟 **CRITICAL HIT!** {action.get('description', '')}")
+            elif action.get('hit'):
+                lines.append(f"⚔️ {action.get('description', '')}")
+            else:
+                lines.append(f"❌ {action.get('description', '')}")
+        elif action.get('type') == 'ability':
+            lines.append(f"✨ {action.get('description', '')}")
+        elif action.get('type') == 'flee':
+            lines.append(f"💨 {action.get('description', '')}")
+        elif action.get('type') == 'dodge':
+            lines.append(f"🛡️ {action.get('description', '')}")
+    
+    # Summary
+    if turn_result.get('damage_dealt', 0) > 0:
+        lines.append(f"💥 Total damage: **{turn_result['damage_dealt']}**")
+    
+    lines.append("───────────────────────")
+    
+    # AI Narration
+    lines.append(f"*{narration}*")
+    
+    # Show updated combat state
+    updated_combat = load_combat(channel_id)
+    if updated_combat:
+        wounded = []
+        for c in updated_combat.get('combatants', []):
+            if c.get('type') == 'player':
+                hp = c.get('hp', 0)
+                max_hp = c.get('max_hp', 1)
+                if hp <= 0:
+                    wounded.append(f"💀 {c['name']} is DOWN!")
+                elif hp < max_hp * 0.25:
+                    wounded.append(f"⚠️ {c['name']}: {hp}/{max_hp} HP")
+        if wounded:
+            lines.append("")
+            lines.extend(wounded)
+    
+    await interaction.followup.send("\n".join(lines))
+    
+    # Play TTS with enemy voice
+    voice_tag = extract_voice_tag(narration) if '[Voice:' in narration else enemy['name']
+    tts_text = clean_for_tts(narration)
+    await play_tts(interaction, tts_text, voice_tag)
+    
+    log_message(channel_id, enemy['name'], narration)
+    
+    # Check if combat should continue
+    players_alive = any(c.get('type') == 'player' and c.get('hp', 0) > 0 
+                       for c in updated_combat.get('combatants', []))
+    enemies_alive = any(c.get('type') == 'enemy' and c.get('hp', 0) > 0 
+                       for c in updated_combat.get('combatants', []))
+    
+    if not players_alive:
+        await interaction.followup.send("💀 **TPK! All players have fallen...**")
+        return
+    
+    if not enemies_alive:
+        await interaction.followup.send("🎉 **Victory!** All enemies have been defeated! Use `/endcombat` to collect rewards.")
+        return
+    
+    # Auto-advance to next turn
+    await asyncio.sleep(1)  # Brief pause for readability
+    
+    next_state = next_turn(channel_id)
+    if next_state:
+        next_combatant = next_state['turn_order'][next_state['current_turn']]
+        
+        if next_combatant.get('type') == 'enemy':
+            # Another enemy - recursively execute their turn
+            await execute_and_narrate_enemy_turn(interaction, channel_id, next_combatant, next_state)
+        else:
+            # Player's turn
+            player_id = next_combatant.get('id')
+            hp_str = f"{next_combatant.get('hp', '?')}/{next_combatant.get('max_hp', '?')}"
+            
+            # Check for legendary actions from enemies
+            await check_legendary_actions(interaction, channel_id, next_state)
+            
+            await interaction.followup.send(
+                f"➡️ <@{player_id}> (**{next_combatant['name']}**), it's your turn!\n"
+                f"❤️ HP: {hp_str}\n"
+                f"Use `/attack`, `/cast`, or `/do` for your action."
+            )
+            await play_tts(interaction, f"{next_combatant['name']}, you're up!", "Narrator")
+
+
+async def check_legendary_actions(interaction: discord.Interaction, 
+                                   channel_id: str, combat_state: dict):
+    """Check if any legendary creatures should use legendary actions."""
+    for combatant in combat_state.get('combatants', []):
+        if combatant.get('type') != 'enemy':
+            continue
+        
+        legendary_remaining = combatant.get('legendary_actions_remaining', 0)
+        legendary_actions = combatant.get('legendary_actions', [])
+        
+        if legendary_remaining > 0 and legendary_actions:
+            if should_use_legendary_action(combatant, combat_state):
+                selected = select_legendary_action(combatant, combat_state)
+                if selected:
+                    await execute_legendary_action(interaction, channel_id, 
+                                                   combatant, selected, combat_state)
+
+
+async def execute_legendary_action(interaction: discord.Interaction,
+                                    channel_id: str, enemy: dict, 
+                                    action: dict, combat_state: dict):
+    """Execute and narrate a legendary action."""
+    result = use_legendary_action(channel_id, enemy['name'], 
+                                   enemy.get('legendary_actions', []).index(action) 
+                                   if action in enemy.get('legendary_actions', []) else 0)
+    
+    if result and not result.get('error'):
+        # Generate narration
+        try:
+            narration = await narrate_legendary_action(
+                enemy['name'], action, result.get('remaining', 0), combat_state
+            )
+        except:
+            narration = f"**{enemy['name']}** uses **{action.get('name', 'a legendary action')}**!"
+        
+        await interaction.followup.send(
+            f"⚡ **LEGENDARY ACTION!**\n"
+            f"{narration}\n"
+            f"*({result.get('remaining', 0)} legendary actions remaining)*"
+        )
+        
+        # TTS
+        tts_text = clean_for_tts(narration)
+        await play_tts(interaction, tts_text, enemy['name'])
+
+
+async def process_and_send_lair_action(interaction: discord.Interaction,
+                                        channel_id: str, combat_state: dict):
+    """Process and narrate a lair action at initiative 20."""
+    lair_result = process_lair_actions(channel_id, combat_state)
+    
+    if lair_result:
+        # Mark as used
+        combat_state['lair_action_used_this_round'] = True
+        save_combat(channel_id, combat_state)
+        
+        # Generate narration
+        try:
+            narration = await narrate_lair_action(lair_result, combat_state)
+        except:
+            narration = f"[Voice: Narrator] {lair_result.get('description', 'The lair shifts ominously...')}"
+        
+        await interaction.channel.send(
+            f"🏰 **LAIR ACTION** (Initiative 20)\n"
+            f"───────────────────────\n"
+            f"{narration}"
+        )
+        
+        # TTS
+        tts_text = clean_for_tts(narration)
+        await play_tts(interaction, tts_text, "Narrator")
 
 
 @bot.tree.command(name="endcombat", description="End the current combat")
@@ -1314,6 +1544,11 @@ async def cast_cmd(
     
     await interaction.response.send_message(output)
     log_message(channel_id, char_name, f"Cast {spell}")
+    
+    # Check for legendary action opportunities after player casts
+    combat_state = load_combat(channel_id)
+    if combat_state:
+        await check_legendary_actions(interaction, channel_id, combat_state)
 
 
 @bot.tree.command(name="prepare", description="Prepare or unprepare a spell")
