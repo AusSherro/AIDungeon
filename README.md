@@ -9,7 +9,7 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 1. **Clone the repo:**
    ```bash
    git clone https://github.com/AusSherro/AIDungeon.git
-   cd AIDungeon/ai-dm-voice
+   cd AIDungeon
    ```
 2. **Install dependencies:**
    ```powershell
@@ -474,7 +474,7 @@ Data can be stored in two formats:
 
 ## 📁 Project Structure
 ```
-ai-dm-voice/
+AIDungeon/
 ├── app.py                 # Flask REST API & web portal
 ├── discord_bot.py         # Main Discord bot (40+ commands)
 ├── config.py              # Configuration management
