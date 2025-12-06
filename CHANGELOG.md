@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.14.0] - 2025-12-07
+### Added
+- **Environmental Hazard Automation**: Complete environment management system
+  - New `utils/environment_manager.py` module (1000+ lines) with traps, weather, lighting, terrain, and hazards
+  - `Trap`, `Hazard`, `WeatherCondition`, `LightingCondition`, `EnvironmentState` dataclasses
+  - Enums: `TrapTrigger`, `TrapType`, `WeatherType`, `LightLevel`, `CoverType`, `TerrainType`, `HazardType`
+- **Trap System**: Complete trap creation, detection, and triggering
+  - 10 pre-built trap templates: pit trap, poison dart, flame jet, spike trap, poison gas, net trap, blade trap, lightning rune, alarm, collapsing ceiling
+  - Trap detection with Perception vs DC
+  - Trap disarming with Thieves' Tools checks
+  - Auto-trigger on movement keywords in `/do` actions
+  - Trap states: hidden, detected, disarmed, triggered
+- **Weather Effects**: 14 weather types with mechanical effects
+  - Clear, cloudy, rain, heavy rain, thunderstorm, fog, dense fog, snow, blizzard, hail, sandstorm, extreme heat, extreme cold, wind, strong wind
+  - Effects: perception modifiers, ranged attack modifiers, movement modifiers, disadvantage conditions, obscurement levels
+  - Weather intensity (1-3) and duration tracking
+- **Lighting System**: Light level tracking with vision checks
+  - Bright light, dim light, darkness, magical darkness
+  - Darkvision support
+  - Advantage/disadvantage for attacks based on visibility
+  - Light source tracking (torch, sunlight, spell)
+- **Terrain Effects**: 11 terrain types with mechanical effects
+  - Normal, difficult, shallow water, deep water, ice, lava, acid, rubble, mud, webs
+  - Movement cost multipliers (1x to 3x)
+  - Terrain damage on entry (lava, acid)
+  - Saving throw effects (ice for prone, webs for restrained)
+- **Hazard Zones**: Area-of-effect environmental hazards
+  - Hazard types: fire, lava, acid, cold, lightning, poison, necrotic, radiant
+  - Position-based hazard tracking
+  - Duration and tick damage
+- **Cover System**: Cover bonus calculations
+  - No cover, half cover (+2 AC/Dex), three-quarters cover (+5 AC/Dex), full cover
+  - Cover calculation between positions with obstacle detection
+- **Enhanced AI Context**: Environment conditions included in AI prompts
+  - Current weather, lighting, active hazards
+  - Detected traps shown to AI for narrative awareness
+- **New Commands**:
+  - `/environment` - View full environment status summary
+  - `/trap` - Create, list, view, remove, or trigger traps
+  - `/detecttrap` - Roll Perception to detect a hidden trap
+  - `/disarmtrap` - Attempt to disarm a detected trap
+  - `/weather` - Set or view weather conditions
+  - `/lighting` - Set or view lighting conditions
+  - `/hazard` - Create, list, or remove environmental hazards
+  - `/terrain` - Add, list, or remove terrain zones
+  - `/cover` - Calculate cover between two positions
+
+### Changed
+- `/do` command now checks for trap triggers on movement actions
+- `build_system_prompt()` now includes environment context
+- Trap trigger notifications shown in `/do` output with save DC
+
 ## [0.13.0] - 2025-12-06
 ### Added
 - **Quest & Objective Tracking System**: Comprehensive quest management with progress tracking

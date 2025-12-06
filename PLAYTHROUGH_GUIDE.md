@@ -18,12 +18,13 @@
 12. [Resource Auto-Consumption](#resource-auto-consumption)
 13. [NPC Memory & Factions](#npc-memory--factions)
 14. [Quest Tracking](#quest-tracking)
-15. [Rest & Recovery](#rest--recovery)
-16. [DM Tools](#dm-tools)
-17. [Tactical Maps](#tactical-maps)
-18. [Player Handouts](#player-handouts)
-19. [Voice & Ambient](#voice--ambient)
-20. [Example Session](#example-session)
+15. [Environment & Hazards](#environment--hazards)
+16. [Rest & Recovery](#rest--recovery)
+17. [DM Tools](#dm-tools)
+18. [Tactical Maps](#tactical-maps)
+19. [Player Handouts](#player-handouts)
+20. [Voice & Ambient](#voice--ambient)
+21. [Example Session](#example-session)
 
 ---
 
@@ -806,6 +807,207 @@ Abandons the quest (can be re-accepted later).
 | `/questnote` | Add note to quest |
 | `/questcomplete` | Complete a quest |
 | `/questabandon` | Abandon a quest |
+
+---
+
+## Environment & Hazards
+
+The environment system tracks traps, weather, lighting, terrain, and hazards. These conditions affect gameplay with mechanical modifiers and are included in AI narration context.
+
+### Viewing Environment Status
+```
+/environment
+```
+Shows comprehensive environment summary:
+```
+🌍 Environment Status
+
+🌧️ Weather: Heavy Rain (intensity 2)
+   - Perception: -2
+   - Ranged attacks: -2
+   - Visibility: lightly obscured
+
+🔦 Lighting: Dim Light
+   - Source: Torches
+   - Disadvantage on Perception
+
+⚙️ Active Traps: 2 (1 detected)
+☠️ Active Hazards: 1
+```
+
+### Managing Traps (DM)
+
+#### Creating Traps from Templates
+```
+/trap action:create template:pit_trap
+```
+
+**Available Templates:**
+| Template | DC | Damage | Effect |
+|----------|-----|--------|--------|
+| `pit_trap` | 15 | 2d6 bludgeoning | Fall into pit |
+| `poison_dart` | 14 | 1d4+poison | DEX save or poisoned |
+| `flame_jet` | 16 | 3d6 fire | DEX save for half |
+| `spike_trap` | 14 | 2d6 piercing | Pressure plate |
+| `poison_gas` | 15 | 3d6 poison | CON save for half |
+| `net_trap` | 13 | None | Restrained until escape |
+| `blade_trap` | 17 | 2d10 slashing | Swinging blade |
+| `lightning_rune` | 16 | 4d6 lightning | Magical ward |
+| `alarm` | 12 | None | Alerts guards |
+| `collapsing_ceiling` | 18 | 4d10 bludgeoning | Everyone in room |
+
+#### Creating Custom Traps
+```
+/trap action:create name:Acid Spray dc:15 save_dc:14 damage:3d6 damage_type:acid
+```
+
+#### Listing Traps
+```
+/trap action:list
+```
+Shows all traps (hidden traps show as "Hidden" unless detected).
+
+### Detecting Traps
+
+When players search for traps:
+```
+/detecttrap trap_name:Pit Trap roll:18
+```
+
+If the roll meets the trap DC:
+```
+👁️ Trap Detected!
+You notice a pit trap: Covered Pit
+*A thin layer of canvas covered with leaves conceals a 10-foot deep pit*
+```
+
+### Disarming Traps
+
+Once detected, players can attempt to disarm:
+```
+/disarmtrap trap_name:Pit Trap roll:15
+```
+
+- **Success:** Trap is disarmed safely
+- **Failure by 5+:** Trap triggers!
+
+### Auto-Trigger on Movement
+
+When using `/do` with movement keywords, traps may trigger automatically:
+```
+/do I walk down the corridor toward the chest
+```
+
+If a trap triggers:
+```
+💥 TRAP TRIGGERED! Poison Dart Trap
+*A dart shoots from a hidden hole in the wall*
+⚠️ Make a DEX saving throw DC 14!
+Damage on fail: 1d4 piercing + 2d6 poison
+```
+
+### Weather Effects
+
+#### Setting Weather
+```
+/weather weather_type:rain intensity:2
+```
+
+**Weather Types and Effects:**
+| Weather | Perception | Ranged | Movement | Special |
+|---------|------------|--------|----------|---------|
+| Clear | — | — | — | — |
+| Fog | -2 | -2 | — | Lightly obscured |
+| Dense Fog | -5 | disadvantage | — | Heavily obscured |
+| Rain | -2 | -2 | — | Puts out fires |
+| Heavy Rain | -5 | disadvantage | 0.75x | Heavily obscured |
+| Thunderstorm | -5 | disadvantage | 0.75x | Lightning strikes |
+| Snow | -2 | — | 0.75x | Tracks visible |
+| Blizzard | -5 | disadvantage | 0.5x | Heavily obscured |
+| Sandstorm | -5 | disadvantage | 0.5x | Heavily obscured |
+| Extreme Heat | — | — | — | CON save/hour or exhaustion |
+| Extreme Cold | — | — | — | CON save/hour or exhaustion |
+| Wind | — | -2 | — | Affects ranged |
+| Strong Wind | — | disadvantage | 0.75x | Can knock prone |
+
+#### Clearing Weather
+```
+/weather weather_type:clear
+```
+
+### Lighting Conditions
+
+#### Setting Lighting
+```
+/lighting light_level:dim source:Torches radius:40
+```
+
+**Light Levels:**
+| Level | Perception | Attacks | Notes |
+|-------|------------|---------|-------|
+| Bright | — | — | Normal vision |
+| Dim | disadvantage | — | Lightly obscured |
+| Darkness | auto-fail | disadvantage vs unseen | Heavily obscured |
+| Magical Darkness | — | — | Darkvision doesn't work |
+
+### Terrain Zones
+
+#### Creating Terrain
+```
+/terrain action:create name:Rubble Field terrain_type:difficult x:5 y:5 width:3 height:3
+```
+
+**Terrain Types:**
+| Type | Movement Cost | Effect |
+|------|---------------|--------|
+| Normal | 1x | Standard movement |
+| Difficult | 2x | Rough terrain |
+| Shallow Water | 2x | Splashing noise |
+| Deep Water | 3x | Swimming required |
+| Ice | 1x | DEX save or fall prone |
+| Lava | 1x | 10d10 fire damage |
+| Acid | 1x | 2d6 acid damage |
+| Rubble | 2x | DEX save or fall prone |
+| Mud | 2x | STR save or stuck |
+| Webs | 3x | STR save or restrained |
+
+### Environmental Hazards
+
+#### Creating Hazards
+```
+/hazard action:create name:Burning Oil hazard_type:fire damage:2d6 damage_type:fire save_dc:13 duration:5
+```
+
+Hazards deal damage to anyone in the area at the start of their turn.
+
+### Cover Calculations
+
+Calculate cover between two positions:
+```
+/cover attacker_x:5 attacker_y:5 target_x:10 target_y:8
+```
+
+**Cover Bonuses:**
+| Cover | AC Bonus | Dex Save Bonus |
+|-------|----------|----------------|
+| Half | +2 | +2 |
+| Three-Quarters | +5 | +5 |
+| Full | Cannot be targeted | Cannot be targeted |
+
+### Environment Commands Quick Reference
+
+| Command | Description |
+|---------|-------------|
+| `/environment` | View full environment status |
+| `/trap action:create` | Create a trap |
+| `/trap action:list` | List all traps |
+| `/detecttrap` | Attempt to detect a trap |
+| `/disarmtrap` | Attempt to disarm a trap |
+| `/weather` | Set or view weather |
+| `/lighting` | Set or view lighting |
+| `/hazard action:create` | Create environmental hazard |
+| `/terrain action:create` | Create terrain zone |
+| `/cover` | Calculate cover between positions |
 
 ---
 

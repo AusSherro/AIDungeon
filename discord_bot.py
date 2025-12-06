@@ -159,6 +159,23 @@ from utils.quest_manager import (
     get_quest_context_for_ai, QUEST_TEMPLATES, create_quest_from_template,
     add_note_to_quest
 )
+from utils.environment_manager import (
+    Trap, Hazard, WeatherCondition, LightingCondition, EnvironmentState,
+    TrapTrigger, TrapType, WeatherType, LightLevel, CoverType, TerrainType, HazardType,
+    load_environment, save_environment,
+    create_trap, create_trap_from_template, get_trap, get_traps_at_position,
+    detect_trap, disarm_trap, trigger_trap, check_trap_triggers, remove_trap, list_traps,
+    create_hazard, get_hazards_at_position, process_hazard_damage,
+    tick_hazard_durations, remove_hazard, list_hazards,
+    set_weather, get_weather, clear_weather, get_weather_effects,
+    set_lighting, get_lighting, get_lighting_effects, check_vision,
+    add_terrain_zone, get_terrain_at_position, get_movement_cost,
+    check_terrain_effects, remove_terrain_zone, list_terrain_zones,
+    get_cover_bonus, calculate_cover,
+    get_environment_context_for_ai, format_environment_summary,
+    format_trap_info, format_hazard_info, format_weather_info, format_lighting_info,
+    TRAP_TEMPLATES, WEATHER_EFFECTS, LIGHT_EFFECTS, TERRAIN_EFFECTS, COVER_BONUSES
+)
 
 load_dotenv()
 Config.validate()
@@ -645,6 +662,21 @@ async def do_action(interaction: discord.Interaction, action: str):
     resource_result = process_narrative_for_resources(user_id, action, auto_consume=True)
     resource_summary = resource_result.get('summary', '')
 
+    # ==== PHASE 7: Environment Hazard Checks ====
+    # Check for trap triggers based on action keywords
+    trap_notification = ""
+    movement_keywords = ['move', 'walk', 'run', 'step', 'approach', 'enter', 'open', 'touch', 'cross', 'advance']
+    if any(kw in action.lower() for kw in movement_keywords):
+        # Check if player triggers any traps
+        trap_results = check_trap_triggers(channel_id, char_name, trigger_type="movement")
+        for result in trap_results:
+            if result.get("triggered"):
+                trap = result["trap"]
+                trap_notification += f"\n\n💥 **TRAP TRIGGERED!** {trap.name}\n"
+                trap_notification += f"*{trap.description}*\n"
+                trap_notification += f"⚠️ Make a {trap.save_type.upper()} saving throw DC {trap.save_dc}!"
+                trap_notification += f"\nDamage on fail: {trap.damage_dice} {trap.damage_type}"
+
     # Build system prompt and get AI response
     system_prompt = build_system_prompt(state)
     narration, updated_state = get_dm_response(action, state, user_id, system_prompt=system_prompt)
@@ -701,6 +733,10 @@ async def do_action(interaction: discord.Interaction, action: str):
     # Add quest notification
     if quest_notification:
         output += quest_notification
+    
+    # Add trap notification
+    if trap_notification:
+        output += trap_notification
     
     # Add loot notifications
     for item in loot_items:
@@ -1983,6 +2019,581 @@ async def quest_template_cmd(
         await interaction.response.send_message(
             f"❌ Template **{template}** not found.",
             ephemeral=True
+        )
+
+
+# =============================================================================
+# ENVIRONMENT COMMANDS
+# =============================================================================
+
+@bot.tree.command(name="environment", description="View current environmental conditions")
+async def environment_cmd(interaction: discord.Interaction):
+    """Display the current environment status."""
+    channel_id = str(interaction.channel.id)
+    
+    summary = format_environment_summary(channel_id)
+    
+    embed = discord.Embed(
+        title="🌍 Environment Status",
+        description=summary,
+        color=discord.Color.dark_teal()
+    )
+    
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="trap", description="Create, view, or manage traps")
+@app_commands.describe(
+    action="Action to perform",
+    name="Name of the trap",
+    template="Use a pre-defined trap template",
+    dc="Detection DC",
+    save_dc="Save DC when triggered",
+    damage="Damage dice (e.g., 2d6)",
+    damage_type="Type of damage",
+    x="X position on map",
+    y="Y position on map"
+)
+@app_commands.choices(action=[
+    app_commands.Choice(name="Create", value="create"),
+    app_commands.Choice(name="List", value="list"),
+    app_commands.Choice(name="View", value="view"),
+    app_commands.Choice(name="Remove", value="remove"),
+    app_commands.Choice(name="Trigger", value="trigger"),
+])
+@app_commands.choices(template=[
+    app_commands.Choice(name="Pit Trap", value="pit_trap"),
+    app_commands.Choice(name="Poison Dart", value="poison_dart"),
+    app_commands.Choice(name="Flame Jet", value="flame_jet"),
+    app_commands.Choice(name="Spike Trap", value="spike_trap"),
+    app_commands.Choice(name="Poison Gas", value="poison_gas"),
+    app_commands.Choice(name="Net Trap", value="net_trap"),
+    app_commands.Choice(name="Swinging Blade", value="blade_trap"),
+    app_commands.Choice(name="Lightning Rune", value="lightning_rune"),
+    app_commands.Choice(name="Alarm", value="alarm"),
+    app_commands.Choice(name="Collapsing Ceiling", value="collapsing_ceiling"),
+])
+async def trap_cmd(
+    interaction: discord.Interaction,
+    action: str,
+    name: str = "",
+    template: str = "",
+    dc: int = 15,
+    save_dc: int = 13,
+    damage: str = "2d6",
+    damage_type: str = "piercing",
+    x: int = -1,
+    y: int = -1
+):
+    """Manage traps in the environment."""
+    channel_id = str(interaction.channel.id)
+    
+    if action == "list":
+        traps = list_traps(channel_id, include_triggered=True)
+        if not traps:
+            await interaction.response.send_message("No traps in this area.", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="⚙️ Traps",
+            color=discord.Color.orange()
+        )
+        
+        for trap in traps:
+            status = "❓ Hidden"
+            if trap.disarmed:
+                status = "✅ Disarmed"
+            elif trap.triggered:
+                status = "💥 Triggered"
+            elif trap.detected:
+                status = "👁️ Detected"
+            
+            pos = f" ({trap.x}, {trap.y})" if trap.x >= 0 else ""
+            embed.add_field(
+                name=f"{status} {trap.name}{pos}",
+                value=f"{trap.trap_type} | DC {trap.dc} | {trap.damage_dice} {trap.damage_type}",
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed)
+    
+    elif action == "create":
+        if not name and not template:
+            await interaction.response.send_message(
+                "Provide a name or choose a template.",
+                ephemeral=True
+            )
+            return
+        
+        if template:
+            trap = create_trap_from_template(channel_id, template, x, y)
+            if trap:
+                await interaction.response.send_message(
+                    f"⚙️ Created trap from template: **{trap.name}**\n"
+                    f"DC {trap.dc} | Save {trap.save_type} DC {trap.save_dc} | {trap.damage_dice} {trap.damage_type}"
+                )
+            else:
+                await interaction.response.send_message(f"Unknown template: {template}", ephemeral=True)
+        else:
+            trap = create_trap(
+                channel_id=channel_id,
+                name=name,
+                dc=dc,
+                save_dc=save_dc,
+                damage_dice=damage,
+                damage_type=damage_type,
+                x=x,
+                y=y
+            )
+            await interaction.response.send_message(
+                f"⚙️ Created trap: **{trap.name}**\n"
+                f"DC {trap.dc} | Save {trap.save_type} DC {trap.save_dc} | {trap.damage_dice} {trap.damage_type}"
+            )
+    
+    elif action == "view":
+        if not name:
+            await interaction.response.send_message("Specify a trap name.", ephemeral=True)
+            return
+        
+        trap = get_trap(channel_id, name)
+        if trap:
+            await interaction.response.send_message(format_trap_info(trap))
+        else:
+            await interaction.response.send_message(f"Trap '{name}' not found.", ephemeral=True)
+    
+    elif action == "remove":
+        if not name:
+            await interaction.response.send_message("Specify a trap name.", ephemeral=True)
+            return
+        
+        if remove_trap(channel_id, name):
+            await interaction.response.send_message(f"✅ Removed trap: {name}")
+        else:
+            await interaction.response.send_message(f"Trap '{name}' not found.", ephemeral=True)
+    
+    elif action == "trigger":
+        if not name:
+            await interaction.response.send_message("Specify a trap name.", ephemeral=True)
+            return
+        
+        result = trigger_trap(channel_id, name, [])
+        if "error" in result:
+            await interaction.response.send_message(f"❌ {result['error']}", ephemeral=True)
+        else:
+            trap = result["trap"]
+            await interaction.response.send_message(
+                f"💥 **{trap.name} TRIGGERED!**\n"
+                f"*{trap.description}*\n\n"
+                f"Save: {trap.save_type} DC {trap.save_dc}\n"
+                f"Damage: {trap.damage_dice} {trap.damage_type}"
+            )
+
+
+@bot.tree.command(name="detecttrap", description="Roll Perception to detect a trap")
+@app_commands.describe(
+    trap_name="Name of the trap (DM use)",
+    roll="Perception roll result"
+)
+async def detect_trap_cmd(
+    interaction: discord.Interaction,
+    trap_name: str,
+    roll: int
+):
+    """Attempt to detect a hidden trap."""
+    channel_id = str(interaction.channel.id)
+    
+    result = detect_trap(channel_id, trap_name, roll)
+    
+    if "error" in result:
+        await interaction.response.send_message(f"❌ {result['error']}", ephemeral=True)
+    elif result.get("already_detected"):
+        await interaction.response.send_message(
+            f"👁️ The trap **{trap_name}** was already detected!",
+            ephemeral=True
+        )
+    elif result["success"]:
+        trap = result["trap"]
+        await interaction.response.send_message(
+            f"👁️ **Trap Detected!**\n"
+            f"You notice a {trap.trap_type} trap: **{trap.name}**\n"
+            f"*{trap.description}*"
+        )
+    else:
+        await interaction.response.send_message(
+            f"You don't notice anything unusual. (Rolled {roll} vs DC {result['dc']})",
+            ephemeral=True
+        )
+
+
+@bot.tree.command(name="disarmtrap", description="Attempt to disarm a trap")
+@app_commands.describe(
+    trap_name="Name of the trap",
+    roll="Thieves' Tools or DEX check result"
+)
+async def disarm_trap_cmd(
+    interaction: discord.Interaction,
+    trap_name: str,
+    roll: int
+):
+    """Attempt to disarm a detected trap."""
+    channel_id = str(interaction.channel.id)
+    
+    result = disarm_trap(channel_id, trap_name, roll)
+    
+    if "error" in result:
+        await interaction.response.send_message(f"❌ {result['error']}", ephemeral=True)
+    elif result.get("already_disarmed"):
+        await interaction.response.send_message(
+            f"✅ The trap **{trap_name}** is already disarmed!",
+            ephemeral=True
+        )
+    elif result.get("triggered"):
+        # Critical failure - trap triggers!
+        trap = result["trap"]
+        trigger_result = trigger_trap(channel_id, trap_name, [interaction.user.display_name])
+        await interaction.response.send_message(
+            f"💥 **CRITICAL FAILURE!** The trap triggers!\n"
+            f"*{trap.description}*\n\n"
+            f"Save: {trap.save_type} DC {trap.save_dc}\n"
+            f"Damage: {trap.damage_dice} {trap.damage_type}"
+        )
+    elif result["success"]:
+        await interaction.response.send_message(
+            f"✅ **Trap Disarmed!**\n"
+            f"You carefully disarm the {result['trap'].name}."
+        )
+    else:
+        await interaction.response.send_message(
+            f"❌ Disarm failed! (Rolled {roll} vs DC {result['dc']})\n"
+            f"The trap remains active. Try again carefully...",
+            ephemeral=True
+        )
+
+
+@bot.tree.command(name="weather", description="Set weather conditions")
+@app_commands.describe(
+    weather_type="Type of weather",
+    intensity="Weather intensity (1-3)",
+    duration="Duration in hours (-1 for indefinite)"
+)
+@app_commands.choices(weather_type=[
+    app_commands.Choice(name="Clear", value="clear"),
+    app_commands.Choice(name="Cloudy", value="cloudy"),
+    app_commands.Choice(name="Rain", value="rain"),
+    app_commands.Choice(name="Heavy Rain", value="heavy_rain"),
+    app_commands.Choice(name="Thunderstorm", value="thunderstorm"),
+    app_commands.Choice(name="Fog", value="fog"),
+    app_commands.Choice(name="Dense Fog", value="dense_fog"),
+    app_commands.Choice(name="Snow", value="snow"),
+    app_commands.Choice(name="Blizzard", value="blizzard"),
+    app_commands.Choice(name="Sandstorm", value="sandstorm"),
+    app_commands.Choice(name="Extreme Heat", value="extreme_heat"),
+    app_commands.Choice(name="Extreme Cold", value="extreme_cold"),
+    app_commands.Choice(name="Wind", value="wind"),
+    app_commands.Choice(name="Strong Wind", value="strong_wind"),
+])
+async def weather_cmd(
+    interaction: discord.Interaction,
+    weather_type: str = "",
+    intensity: int = 1,
+    duration: int = -1
+):
+    """Set or view current weather conditions."""
+    channel_id = str(interaction.channel.id)
+    
+    if not weather_type:
+        # View current weather
+        weather = get_weather(channel_id)
+        if weather:
+            await interaction.response.send_message(format_weather_info(weather))
+        else:
+            await interaction.response.send_message("🌤️ Weather is clear.")
+        return
+    
+    if weather_type == "clear":
+        clear_weather(channel_id)
+        await interaction.response.send_message("🌤️ Weather cleared.")
+        return
+    
+    weather = set_weather(channel_id, weather_type, intensity, duration)
+    if weather:
+        info = format_weather_info(weather)
+        await interaction.response.send_message(f"🌦️ Weather Changed!\n\n{info}")
+    else:
+        await interaction.response.send_message(f"Unknown weather type: {weather_type}", ephemeral=True)
+
+
+@bot.tree.command(name="lighting", description="Set lighting conditions")
+@app_commands.describe(
+    light_level="Lighting level",
+    source="Source of light (torch, sunlight, etc.)",
+    radius="Radius in feet (0 for entire area)"
+)
+@app_commands.choices(light_level=[
+    app_commands.Choice(name="Bright Light", value="bright"),
+    app_commands.Choice(name="Dim Light", value="dim"),
+    app_commands.Choice(name="Darkness", value="darkness"),
+    app_commands.Choice(name="Magical Darkness", value="magical_darkness"),
+])
+async def lighting_cmd(
+    interaction: discord.Interaction,
+    light_level: str = "",
+    source: str = "",
+    radius: int = 0
+):
+    """Set or view current lighting conditions."""
+    channel_id = str(interaction.channel.id)
+    
+    if not light_level:
+        # View current lighting
+        lighting = get_lighting(channel_id)
+        await interaction.response.send_message(format_lighting_info(lighting))
+        return
+    
+    lighting = set_lighting(channel_id, light_level, source, radius)
+    info = format_lighting_info(lighting)
+    
+    emoji = "🔦" if light_level == "dim" else ("🌑" if "dark" in light_level else "☀️")
+    await interaction.response.send_message(f"{emoji} Lighting Changed!\n\n{info}")
+
+
+@bot.tree.command(name="hazard", description="Create or manage environmental hazards")
+@app_commands.describe(
+    action="Action to perform",
+    name="Name of the hazard",
+    hazard_type="Type of hazard",
+    damage="Damage dice (e.g., 2d6)",
+    damage_type="Type of damage",
+    save_dc="DC for saving throw",
+    duration="Duration in rounds (-1 for permanent)",
+    x="X position",
+    y="Y position",
+    width="Width of hazard area",
+    height="Height of hazard area"
+)
+@app_commands.choices(action=[
+    app_commands.Choice(name="Create", value="create"),
+    app_commands.Choice(name="List", value="list"),
+    app_commands.Choice(name="Remove", value="remove"),
+])
+@app_commands.choices(hazard_type=[
+    app_commands.Choice(name="Fire", value="fire"),
+    app_commands.Choice(name="Lava", value="lava"),
+    app_commands.Choice(name="Acid", value="acid"),
+    app_commands.Choice(name="Poison Cloud", value="poison_cloud"),
+    app_commands.Choice(name="Magical Zone", value="magical_zone"),
+])
+async def hazard_cmd(
+    interaction: discord.Interaction,
+    action: str,
+    name: str = "",
+    hazard_type: str = "fire",
+    damage: str = "2d6",
+    damage_type: str = "fire",
+    save_dc: int = 15,
+    duration: int = -1,
+    x: int = -1,
+    y: int = -1,
+    width: int = 1,
+    height: int = 1
+):
+    """Manage environmental hazards."""
+    channel_id = str(interaction.channel.id)
+    
+    if action == "list":
+        hazards = list_hazards(channel_id)
+        if not hazards:
+            await interaction.response.send_message("No hazards in this area.", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="☠️ Environmental Hazards",
+            color=discord.Color.red()
+        )
+        
+        for h in hazards:
+            dur = f" [{h.rounds_remaining}r]" if h.duration_rounds > 0 else " [permanent]"
+            embed.add_field(
+                name=f"💀 {h.name}{dur}",
+                value=f"{h.hazard_type} | {h.damage_dice} {h.damage_type} | DC {h.save_dc}",
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed)
+    
+    elif action == "create":
+        if not name:
+            await interaction.response.send_message("Provide a hazard name.", ephemeral=True)
+            return
+        
+        hazard = create_hazard(
+            channel_id=channel_id,
+            name=name,
+            hazard_type=hazard_type,
+            damage_dice=damage,
+            damage_type=damage_type,
+            save_dc=save_dc,
+            duration_rounds=duration,
+            x=x,
+            y=y,
+            width=width,
+            height=height
+        )
+        
+        await interaction.response.send_message(
+            f"☠️ Created hazard: **{hazard.name}**\n"
+            f"Type: {hazard.hazard_type} | {hazard.damage_dice} {hazard.damage_type} | DC {save_dc}"
+        )
+    
+    elif action == "remove":
+        if not name:
+            await interaction.response.send_message("Specify a hazard name.", ephemeral=True)
+            return
+        
+        if remove_hazard(channel_id, name):
+            await interaction.response.send_message(f"✅ Removed hazard: {name}")
+        else:
+            await interaction.response.send_message(f"Hazard '{name}' not found.", ephemeral=True)
+
+
+@bot.tree.command(name="terrain", description="Create or manage terrain zones")
+@app_commands.describe(
+    action="Action to perform",
+    name="Name of the terrain zone",
+    terrain_type="Type of terrain",
+    x="X position",
+    y="Y position",
+    width="Width of zone",
+    height="Height of zone"
+)
+@app_commands.choices(action=[
+    app_commands.Choice(name="Create", value="create"),
+    app_commands.Choice(name="List", value="list"),
+    app_commands.Choice(name="Remove", value="remove"),
+])
+@app_commands.choices(terrain_type=[
+    app_commands.Choice(name="Difficult Terrain", value="difficult"),
+    app_commands.Choice(name="Shallow Water", value="water_shallow"),
+    app_commands.Choice(name="Deep Water", value="water_deep"),
+    app_commands.Choice(name="Ice", value="ice"),
+    app_commands.Choice(name="Lava", value="lava"),
+    app_commands.Choice(name="Acid Pool", value="acid"),
+    app_commands.Choice(name="Rubble", value="rubble"),
+    app_commands.Choice(name="Mud", value="mud"),
+    app_commands.Choice(name="Webs", value="webs"),
+])
+async def terrain_cmd(
+    interaction: discord.Interaction,
+    action: str,
+    name: str = "",
+    terrain_type: str = "difficult",
+    x: int = 0,
+    y: int = 0,
+    width: int = 1,
+    height: int = 1
+):
+    """Manage terrain zones."""
+    channel_id = str(interaction.channel.id)
+    
+    if action == "list":
+        zones = list_terrain_zones(channel_id)
+        if not zones:
+            await interaction.response.send_message("No special terrain zones.", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="🏔️ Terrain Zones",
+            color=discord.Color.dark_green()
+        )
+        
+        for zone in zones:
+            effects = zone.get("effects", {})
+            embed.add_field(
+                name=f"🗺️ {zone['name']}",
+                value=f"{effects.get('name', zone['terrain_type'])} | ({zone['x']},{zone['y']}) {zone['width']}x{zone['height']}",
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed)
+    
+    elif action == "create":
+        if not name:
+            await interaction.response.send_message("Provide a terrain zone name.", ephemeral=True)
+            return
+        
+        result = add_terrain_zone(
+            channel_id=channel_id,
+            name=name,
+            terrain_type=terrain_type,
+            x=x,
+            y=y,
+            width=width,
+            height=height
+        )
+        
+        if "error" in result:
+            await interaction.response.send_message(f"❌ {result['error']}", ephemeral=True)
+        else:
+            effects = result.get("effects", {})
+            await interaction.response.send_message(
+                f"🏔️ Created terrain zone: **{name}**\n"
+                f"Type: {effects.get('name', terrain_type)} | Area: ({x},{y}) to ({x+width-1},{y+height-1})"
+            )
+    
+    elif action == "remove":
+        if not name:
+            await interaction.response.send_message("Specify a terrain zone name.", ephemeral=True)
+            return
+        
+        if remove_terrain_zone(channel_id, name):
+            await interaction.response.send_message(f"✅ Removed terrain zone: {name}")
+        else:
+            await interaction.response.send_message(f"Terrain zone '{name}' not found.", ephemeral=True)
+
+
+@bot.tree.command(name="cover", description="Calculate cover between positions")
+@app_commands.describe(
+    attacker_x="Attacker X position",
+    attacker_y="Attacker Y position",
+    target_x="Target X position",
+    target_y="Target Y position"
+)
+async def cover_cmd(
+    interaction: discord.Interaction,
+    attacker_x: int,
+    attacker_y: int,
+    target_x: int,
+    target_y: int
+):
+    """Calculate cover between two positions."""
+    channel_id = str(interaction.channel.id)
+    
+    # Get obstacles from terrain zones
+    zones = list_terrain_zones(channel_id)
+    obstacles = []
+    for zone in zones:
+        effects = zone.get("effects", {})
+        cover = effects.get("cover")
+        if cover:
+            for dx in range(zone["width"]):
+                for dy in range(zone["height"]):
+                    obstacles.append({
+                        "x": zone["x"] + dx,
+                        "y": zone["y"] + dy,
+                        "cover_type": cover
+                    })
+    
+    cover_type = calculate_cover(attacker_x, attacker_y, target_x, target_y, obstacles)
+    bonus = get_cover_bonus(cover_type)
+    
+    if cover_type == "none":
+        await interaction.response.send_message("🎯 No cover between these positions.")
+    elif cover_type == "full":
+        await interaction.response.send_message("🧱 **Full Cover** - Target cannot be directly targeted.")
+    else:
+        await interaction.response.send_message(
+            f"🛡️ **{cover_type.replace('_', ' ').title()} Cover**\n"
+            f"+{bonus['ac']} AC, +{bonus['dex_save']} Dex saves"
         )
 
 

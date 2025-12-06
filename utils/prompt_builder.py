@@ -50,6 +50,17 @@ def build_system_prompt(state: dict, channel_id: str = None) -> str:
                 quest_context = "\n\n" + quest_context
         except Exception:
             pass  # If quest manager not available, skip
+    
+    # Get environment context if channel_id provided
+    environment_context = ""
+    if channel_id:
+        try:
+            from utils.environment_manager import get_environment_context_for_ai
+            environment_context = get_environment_context_for_ai(channel_id)
+            if environment_context:
+                environment_context = "\n\n" + environment_context
+        except Exception:
+            pass  # If environment manager not available, skip
 
     system_prompt = f"""You are the Dungeon Master for a Discord-based D&D 5e campaign. Your role is to narrate the story, control NPCs, and respond to player actions with immersive descriptions.
 
@@ -62,7 +73,7 @@ def build_system_prompt(state: dict, channel_id: str = None) -> str:
 
 **Party:** {party_comp if party_comp else 'Unknown adventurers'}
 
-**Recent Events:** {actions_text if actions_text else 'The adventure begins...'}{npc_context}{faction_context}{quest_context}
+**Recent Events:** {actions_text if actions_text else 'The adventure begins...'}{npc_context}{faction_context}{quest_context}{environment_context}
 
 **Your Response Style:**
 1. Describe the scene and NPC reactions vividly (2-3 sentences)

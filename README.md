@@ -128,6 +128,21 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 | `/questnote quest_name:"Name" note:"..."` | Add note to a quest |
 | `/questtemplate template:bounty name:"..." description:"..."` | Create from template |
 
+### Environment & Hazards
+| Command | Description |
+|---------|-------------|
+| `/environment` | View full environment status (weather, lighting, hazards) |
+| `/trap action:create name:"Pit Trap"` | Create a custom trap |
+| `/trap action:create template:poison_dart` | Create from 10 pre-built templates |
+| `/trap action:list` | View all traps in the area |
+| `/detecttrap trap_name:"Name" roll:18` | Attempt to detect a trap |
+| `/disarmtrap trap_name:"Name" roll:15` | Attempt to disarm a trap |
+| `/weather weather_type:rain` | Set weather (14 types: rain, fog, blizzard, etc.) |
+| `/lighting light_level:dim` | Set lighting (bright, dim, darkness, magical_darkness) |
+| `/hazard action:create name:"Fire" hazard_type:fire` | Create environmental hazard |
+| `/terrain action:create name:"Rubble" terrain_type:difficult` | Add terrain zone |
+| `/cover attacker_x:5 attacker_y:5 target_x:10 target_y:5` | Calculate cover between positions |
+
 ### Loot & Treasure
 | Command | Description |
 |---------|-------------|
