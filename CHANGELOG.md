@@ -1,5 +1,87 @@
 # Changelog
 
+## [3.1.0] - 2024-12-07
+### Phase 16: Command Consolidation
+
+Reduced total slash commands from ~120 to 76 to stay well under Discord's 100 command limit.
+
+### Changed - Command Consolidations
+
+**Quest Commands (12 → 1)**
+- `/quest` now handles all quest operations via `action` parameter
+- Actions: `list`, `view`, `create`, `complete`, `abandon`, `objective`, `progress`, `note`, `template`, `rumors`, `investigate-rumor`, `chain`, `accept`
+- Removed: `/quests`, `/questcomplete`, `/questabandon`, `/questobjective`, `/questprogress`, `/questnote`, `/questtemplate`, `/rumors`, `/investigaterumor`, `/questchain`, `/acceptquest`
+
+**Travel & Encounter Commands (7 → 2)**
+- `/travel` now handles all travel operations via `action` parameter
+- Actions: `start`, `status`, `advance`, `cancel`
+- `/encounter` now handles all encounter operations
+- Actions: `random-combat`, `social`, `check`
+- Removed: `/travelstatus`, `/traveladvance`, `/travelcancel`, `/randomencounter`, `/encountercheck`
+
+**World Map Commands (5 → 1)**
+- `/worldmap` now handles all world map operations via `action` parameter
+- Actions: `view`, `fast-travel`, `add-location`, `set-location`, `location-info`
+- Removed: `/fasttravel`, `/addlocation`, `/setlocation`, `/locationinfo`
+
+**Session Commands (4 → 1)**
+- `/session` now handles all session operations via `action` parameter
+- Actions: `view`, `end`, `pause`, `recap`, `history`, `recover`
+- Removed: `/sessionrecap`, `/sessionhistory`, `/recover`
+
+**Map Commands (9 → 1)**
+- `/map` now handles all tactical map operations via `action` parameter
+- Actions: `view`, `create`, `add-token`, `move`, `remove`, `distance`, `range`, `terrain`, `clear`
+- Removed: `/newmap`, `/addtoken`, `/movetoken`, `/removetoken`, `/distance`, `/inrange`, `/setterrain`, `/clearmap`
+
+**Handout Commands (9 → 3)**
+- `/handout` now handles most handout operations via `action` parameter
+- Actions: `view`, `read`, `create`, `reveal`, `share`, `delete`, `list-all`
+- `/secret` kept separate for DM-to-player secrets
+- `/mysecrets` kept separate for player convenience
+- Removed: `/viewhandouts`, `/readhandout`, `/dmhandouts`, `/revealhandout`, `/sharehandout`, `/deletehandout`
+
+**NPC & Shop Commands (7 → 2)**
+- `/npc` now handles all NPC and faction operations via `action` parameter
+- Actions: `list`, `view`, `create`, `disposition`, `factions`, `faction-view`, `faction-create`, `reputation`
+- `/shop` now handles all shop operations via `action` parameter
+- Actions: `view`, `create`, `buy`, `sell`
+- Removed: `/npcdisposition`, `/faction`, `/reputation`, `/buy`, `/sell`
+
+**Trap Commands (3 → 1)**
+- `/trap` now includes detect and disarm actions
+- Actions: `list`, `create`, `view`, `remove`, `trigger`, `detect`, `disarm`
+- Removed: `/detecttrap`, `/disarmtrap`
+
+### Technical
+- Total commands reduced from ~120 to 76 (44 commands removed)
+- All consolidated commands use `@app_commands.choices(action=[...])` pattern
+- Underlying utility functions unchanged - automation systems unaffected
+- All consolidations verified with `get_errors` - no issues found
+
+---
+
+## [3.0.0] - 2024-12-07
+### 🎉 v3.0 - Full Autonomy Milestone COMPLETE
+
+This release marks the completion of the **Full Autonomy** milestone. The bot can now run an entire D&D session with minimal DM intervention. Players just show up and play!
+
+### What's New in v3.0
+- **Combat starts automatically** from AI narration or player attack intent
+- **Quests auto-create** from NPC dialogue and complete when objectives are met
+- **Travel happens naturally** from narrative ("we head to town")
+- **Environment adapts** to location and time automatically
+- **Sessions resume seamlessly** when players return
+
+### Phases Completed in v3.0
+- Phase 11: Combat Trigger Detection ✅
+- Phase 12: Dynamic Environment Generation ✅
+- Phase 13: Autonomous Quest Management ✅
+- Phase 14: Intelligent Travel & Exploration ✅
+- Phase 15: Session Continuity & Auto-Resume ✅
+
+---
+
 ## [0.20.0] - 2024-12-06
 ### Added
 - **Session Continuity & Auto-Resume (Phase 15)**: Seamless session management

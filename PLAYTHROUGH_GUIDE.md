@@ -617,12 +617,12 @@ Bot: 🎭 Met new NPC: Gundren Rockseeker (dwarf, merchant, friendly)
 
 ### Viewing NPCs
 ```
-/npc
+/npc action:list
 ```
 Lists all NPCs you've encountered with their disposition and role.
 
 ```
-/npc name:Gundren
+/npc action:view name:"Gundren"
 ```
 Shows detailed info about a specific NPC including:
 - Disposition toward party
@@ -645,7 +645,7 @@ The AI and DM actions affect how NPCs feel about the party:
 
 ### Adjusting Disposition (DM)
 ```
-/npcdisposition npc_name:Gundren change:1 reason:Rescued his brother
+/npc action:disposition name:"Gundren" change:1 reason:"Rescued his brother"
 ```
 - Positive numbers improve disposition
 - Negative numbers worsen it
@@ -655,12 +655,17 @@ The AI and DM actions affect how NPCs feel about the party:
 
 Track your reputation with organizations and groups:
 ```
-/faction
+/npc action:factions
 ```
 Lists all factions and your standing with each.
 
 ```
-/faction name:Thieves Guild
+/npc action:faction-view name:"Thieves Guild"
+```
+View details about a specific faction.
+
+```
+/npc action:faction-create name:"Thieves Guild" description:"Underground criminal network"
 ```
 Creates a new faction to track.
 
@@ -678,31 +683,31 @@ Creates a new faction to track.
 
 ### Adjusting Reputation (DM)
 ```
-/reputation faction:Thieves Guild change:15 reason:Completed heist job
+/npc action:reputation faction:"Thieves Guild" change:15 reason:"Completed heist job"
 ```
 
 ### Merchants & Shops
 
 Create NPC merchants with persistent inventory:
 ```
-/shop npc_name:Gundren type:general
+/shop action:create merchant:"Gundren" shop_type:general
 ```
 Shop types: `general`, `weapons`, `armor`, `potions`, `magic`
 
 ### Buying Items
 ```
-/shop npc_name:Gundren
+/shop action:view merchant:"Gundren"
 ```
 Shows available inventory with prices.
 
 ```
-/buy npc_name:Gundren item:Rope quantity:2
+/shop action:buy merchant:"Gundren" item:"Rope" quantity:2
 ```
 Purchase items (gold auto-deducted).
 
 ### Selling Items
 ```
-/sell npc_name:Gundren item:Longsword
+/shop action:sell merchant:"Gundren" item:"Longsword" base_price:15
 ```
 Sell items for 50% of base value.
 
@@ -749,7 +754,7 @@ This automatically creates the quest in your quest log. You'll see a notificatio
 
 ### Viewing Your Quest Log
 ```
-/quests
+/quest action:list
 ```
 Shows all your active quests with objectives and progress:
 ```
@@ -770,7 +775,7 @@ Clear out the goblin threat on the Triboar Trail
 
 ### Viewing a Specific Quest
 ```
-/quest name:Lost Mine
+/quest action:view name:"Lost Mine"
 ```
 Shows detailed information including notes, rewards, and quest giver.
 
@@ -787,13 +792,13 @@ You'll see: `👂 **Rumor heard:** *"Strange lights at the old cemetery at night
 
 **Viewing Rumors:**
 ```
-/rumors
+/quest action:rumors
 ```
 Shows all rumors the party has heard, both investigated and uninvestigated.
 
 **Investigating Rumors:**
 ```
-/investigaterumor rumor_number:1 quest_name:Investigate the Cemetery
+/quest action:investigate-rumor rumor_number:1 name:"Investigate the Cemetery"
 ```
 Converts a rumor into an active quest for the party to pursue.
 
@@ -807,7 +812,7 @@ Quests can be linked so completing one unlocks another:
 
 Or manually:
 ```
-/questchain parent_quest:Rescue the Daughter child_quest:Find the Goblin Lair
+/quest action:chain parent:"Rescue the Daughter" child:"Find the Goblin Lair"
 ```
 
 When the parent quest completes, you'll see:
@@ -819,12 +824,12 @@ When the parent quest completes, you'll see:
 
 Quest hooks create "available" quests that aren't active yet:
 ```
-/acceptquest quest_name:Investigate the Cemetery
+/quest action:accept name:"Investigate the Cemetery"
 ```
 
 ### Creating Quests (DM)
 ```
-/quest name:Rescue the Prisoners description:Free the captives from Cragmaw Hideout difficulty:normal type:rescue
+/quest action:create name:"Rescue the Prisoners" description:"Free the captives from Cragmaw Hideout" difficulty:normal quest_type:rescue
 ```
 
 **Quest Difficulties:**
@@ -843,7 +848,7 @@ Quest hooks create "available" quests that aren't active yet:
 
 Quickly create common quests using templates:
 ```
-/questtemplate template:bounty target:Goblins count:10 reward:50gp location:Triboar Trail
+/quest action:template template:bounty name:"Goblin Hunt" target:"Goblins" count:10
 ```
 
 **Available Templates:**
@@ -856,7 +861,7 @@ Quickly create common quests using templates:
 
 ### Adding Objectives
 ```
-/questobjective quest:Lost Mine objective:Find the secret entrance type:discovery target_count:1
+/quest action:objective name:"Lost Mine" objective:"Find the secret entrance"
 ```
 
 **Objective Types:**
@@ -869,13 +874,13 @@ Quickly create common quests using templates:
 
 ### Tracking Progress
 ```
-/questprogress quest:Goblin Bounty objective:Defeat goblins progress:5
+/quest action:progress name:"Goblin Bounty" objective_number:1 amount:5
 ```
 Updates objective progress (e.g., 3/10 → 5/10).
 
 ### Adding Notes
 ```
-/questnote quest:Lost Mine note:Gundren mentioned a map hidden in his boot
+/quest action:note name:"Lost Mine" note:"Gundren mentioned a map hidden in his boot"
 ```
 Add player notes to quests for reference.
 
@@ -909,7 +914,7 @@ Quests complete automatically when the AI includes:
 
 Or manually:
 ```
-/questcomplete quest:Goblin Bounty
+/quest action:complete name:"Goblin Bounty"
 ```
 
 Either way awards rewards:
@@ -924,7 +929,7 @@ Rewards:
 
 ### Abandoning Quests
 ```
-/questabandon quest:Goblin Bounty reason:Too dangerous right now
+/quest action:abandon name:"Goblin Bounty" reason:"Too dangerous right now"
 ```
 Abandons the quest (can be re-accepted later).
 
@@ -932,18 +937,19 @@ Abandons the quest (can be re-accepted later).
 
 | Command | Description |
 |---------|-------------|
-| `/quests` | View full quest log |
-| `/quest` | View/create specific quest |
-| `/questtemplate` | Create from template |
-| `/questobjective` | Add objective to quest |
-| `/questprogress` | Update objective progress |
-| `/questnote` | Add note to quest |
-| `/questcomplete` | Complete a quest |
-| `/questabandon` | Abandon a quest |
-| `/rumors` | View heard rumors |
-| `/investigaterumor` | Convert rumor to quest |
-| `/questchain` | Link quests in sequence |
-| `/acceptquest` | Accept available quest |
+| `/quest action:list` | View full quest log |
+| `/quest action:view name:"..."` | View specific quest |
+| `/quest action:create name:"..." description:"..."` | Create new quest |
+| `/quest action:template template:bounty name:"..."` | Create from template |
+| `/quest action:objective name:"..." objective:"..."` | Add objective |
+| `/quest action:progress name:"..." objective_number:1` | Update progress |
+| `/quest action:note name:"..." note:"..."` | Add note |
+| `/quest action:complete name:"..."` | Complete a quest |
+| `/quest action:abandon name:"..."` | Abandon a quest |
+| `/quest action:rumors` | View heard rumors |
+| `/quest action:investigate-rumor rumor_number:1` | Convert rumor to quest |
+| `/quest action:chain parent:"..." child:"..."` | Link quests |
+| `/quest action:accept name:"..."` | Accept available quest |
 
 ---
 
@@ -1008,7 +1014,7 @@ Shows all traps (hidden traps show as "Hidden" unless detected).
 
 When players search for traps:
 ```
-/detecttrap trap_name:Pit Trap roll:18
+/trap action:detect name:"Pit Trap" roll:18
 ```
 
 If the roll meets the trap DC:
@@ -1022,7 +1028,7 @@ You notice a pit trap: Covered Pit
 
 Once detected, players can attempt to disarm:
 ```
-/disarmtrap trap_name:Pit Trap roll:15
+/trap action:disarm name:"Pit Trap" roll:15
 ```
 
 - **Success:** Trap is disarmed safely
@@ -1232,13 +1238,13 @@ Locations are automatically added to your world map with connections.
 
 #### View World Map
 ```
-/worldmap
+/worldmap action:view
 ```
 Shows all discovered locations, connections, and distances.
 
 #### Fast Travel
 ```
-/fasttravel destination:Phandalin
+/worldmap action:fast-travel destination:"Phandalin"
 ```
 Instantly travel to a previously **visited** location. Fast travel:
 - Skips encounter rolls
@@ -1247,17 +1253,17 @@ Instantly travel to a previously **visited** location. Fast travel:
 
 #### Add Location Manually
 ```
-/addlocation name:"Ruined Tower" terrain:hills location_type:ruins distance_from_current:20
+/worldmap action:add-location name:"Ruined Tower" terrain:hills location_type:ruins
 ```
 
 #### Set Current Location
 ```
-/setlocation location:"Phandalin"
+/worldmap action:set-location location:"Phandalin"
 ```
 
 #### View Location Details
 ```
-/locationinfo location:"Wave Echo Cave"
+/worldmap action:location-info location:"Wave Echo Cave"
 ```
 
 ### Location Discovery Status
@@ -1276,7 +1282,7 @@ You can still use the original travel commands if you prefer more control:
 
 ### Starting a Journey
 ```
-/travel destination:Phandalin distance:30 terrain:road pace:normal origin:Neverwinter
+/travel action:start destination:"Phandalin" distance:30 terrain:road pace:normal origin:"Neverwinter"
 ```
 
 **Parameters:**
@@ -1311,7 +1317,7 @@ You can still use the original travel commands if you prefer more control:
 
 ### Checking Travel Status
 ```
-/travelstatus
+/travel action:status
 ```
 
 Shows progress:
@@ -1329,7 +1335,7 @@ Hours Today: 6.0/8    Remaining: 6.0 miles
 
 ### Advancing Travel
 ```
-/traveladvance hours:4
+/travel action:advance hours:4
 ```
 
 Advances travel by the specified hours (1-8). Each hour:
@@ -1348,7 +1354,7 @@ The campaign location is automatically updated.
 
 ### Canceling Travel
 ```
-/travelcancel
+/travel action:cancel
 ```
 
 Stops the current journey. The party remains in the wilderness at their current progress point.
@@ -1357,7 +1363,7 @@ Stops the current journey. The party remains in the wilderness at their current 
 
 #### Combat Encounters
 ```
-/randomencounter difficulty:medium terrain:forest
+/encounter action:random-combat difficulty:medium terrain:forest
 ```
 
 Generates a combat encounter scaled to your party:
@@ -1389,7 +1395,7 @@ Use /combat to start combat with these enemies
 
 #### Non-Combat Encounters
 ```
-/encounter event_type:social terrain:road
+/encounter action:social terrain:road
 ```
 
 **Event Types:**
@@ -1414,7 +1420,7 @@ Roleplay this encounter or use /do to interact
 
 ### Encounter Checks
 ```
-/encountercheck hours:4 terrain:forest is_night:false stealthy:true
+/encounter action:check hours:4 terrain:forest is_night:false stealthy:true
 ```
 
 Manually roll for random encounters. Returns whether something happens and what type.
@@ -1444,13 +1450,18 @@ The encounter system includes monsters from CR 0 to CR 10:
 
 | Command | Description |
 |---------|-------------|
-| `/travel` | Start a journey between locations |
-| `/travelstatus` | View current travel progress |
-| `/traveladvance` | Advance travel by hours |
-| `/travelcancel` | Cancel current journey |
-| `/randomencounter` | Generate a combat encounter |
-| `/encounter` | Generate a non-combat encounter |
-| `/encountercheck` | Roll for random encounter |
+| `/travel action:start destination:"..."` | Start a journey |
+| `/travel action:status` | View current travel progress |
+| `/travel action:advance hours:4` | Advance travel by hours |
+| `/travel action:cancel` | Cancel current journey |
+| `/worldmap action:view` | View world map |
+| `/worldmap action:fast-travel destination:"..."` | Fast travel |
+| `/worldmap action:add-location name:"..."` | Add location |
+| `/worldmap action:set-location location:"..."` | Set location |
+| `/worldmap action:location-info location:"..."` | Location details |
+| `/encounter action:random-combat` | Generate combat encounter |
+| `/encounter action:social` | Generate social encounter |
+| `/encounter action:check` | Roll for random encounter |
 
 ---
 
@@ -1468,7 +1479,7 @@ When you start a campaign with `/campaign`, the bot:
 
 ### View Session Status
 ```
-/session
+/session action:view
 ```
 Shows:
 - Current session duration
@@ -1496,7 +1507,7 @@ Shows:
 
 When returning to play:
 ```
-/sessionrecap
+/session action:recap
 ```
 The AI narrates what happened last session:
 - Previous session events
@@ -1505,7 +1516,7 @@ The AI narrates what happened last session:
 
 ### Session History
 ```
-/sessionhistory
+/session action:history
 ```
 View past session summaries (last 10 sessions):
 - Date and duration
@@ -1522,11 +1533,11 @@ When players join a voice channel:
 
 ### Crash Recovery
 ```
-/recover
+/session action:recover
 ```
 If the bot crashes during play:
 - Recovery points are saved every 5 minutes
-- Use `/recover` to restore from last save
+- Use `/session action:recover` to restore from last save
 - React ✅ to confirm restore
 
 ### Session Pacing
@@ -1604,64 +1615,59 @@ Examples:
 
 ### Create a New Map
 ```
-/newmap <name> <width> <height> [template]
+/map action:create name:"tavern_brawl" width:10 height:10 template:tavern
 ```
 Examples:
-- `/newmap tavern_brawl 10 10`
-- `/newmap forest_ambush 15 12 forest`
-- `/newmap dungeon_room 8 8 dungeon`
+- `/map action:create name:"dungeon_room" width:8 height:8 template:dungeon`
+- `/map action:create name:"forest_ambush" width:15 height:12 template:forest`
 
 **Templates:** `dungeon`, `forest`, `tavern`, `cave`
 
 ### View the Map
 ```
-/map
+/map action:view
 ```
 Displays the ASCII tactical map with all tokens.
 
 ### Add Tokens
 ```
-/addtoken <name> <x> <y> [symbol] [color]
+/map action:add-token name:"Thorin" x:3 y:5 token_type:player
 ```
 Examples:
-- `/addtoken Thorin 3 5 T blue` - Player token
-- `/addtoken Goblin1 7 5 G red` - Enemy token
-- `/addtoken Chest 5 8 $ yellow` - Object
+- `/map action:add-token name:"Goblin1" x:7 y:5 token_type:enemy`
+- `/map action:add-token name:"Chest" x:5 y:8 token_type:object`
 
 ### Move Tokens
 ```
-/movetoken <name> <x> <y>
+/map action:move token_name:"Thorin" x:5 y:6
 ```
-Example: `/movetoken Thorin 5 6`
 
 ### Remove Tokens
 ```
-/removetoken <name>
+/map action:remove token_name:"Goblin1"
 ```
 
 ### Set Terrain
 ```
-/setterrain <x> <y> <terrain_type>
+/map action:terrain x:5 y:5 terrain_type:difficult
 ```
 **Terrain Types:** `floor`, `wall`, `water`, `difficult`, `pit`, `door`, `stairs`, `altar`, `tree`, `bush`, `rock`, `fire`, `ice`, `lava`, `magic`
 
 ### Check Distance
 ```
-/distance <token1> <token2>
+/map action:distance token1:"Thorin" token2:"Goblin1"
 ```
-Example: `/distance Thorin Goblin1`
 Returns distance in feet (5ft per square).
 
 ### Check Range
 ```
-/inrange <token> <range_feet>
+/map action:range token_name:"Thorin" range_feet:30
 ```
-Example: `/inrange Thorin 30`
 Shows all tokens within 30 feet.
 
 ### Clear the Map
 ```
-/clearmap
+/map action:clear
 ```
 Deletes the current tactical map.
 
@@ -1671,31 +1677,28 @@ Deletes the current tactical map.
 
 ### Create a Handout (DM)
 ```
-/handout <title> <content> [type] [visible_to]
+/handout action:create title:"Mysterious Letter" content:"Meet me at midnight..." handout_type:letter visible_to:@Player1
 ```
 Examples:
-- `/handout "Mysterious Letter" "Meet me at midnight..." letter`
-- `/handout "Dungeon Map" "Shows a winding passage..." map @Player1`
+- `/handout action:create title:"Dungeon Map" content:"Shows a winding passage..." handout_type:map`
 
 **Handout Types:** `note`, `letter`, `map`, `image`, `item`, `lore`, `clue`, `journal`, `wanted`, `secret`
 
 ### Create a Secret (DM)
 ```
-/secret <player> <title> <content>
+/secret player:@Rogue title:"Hidden Knowledge" content:"You notice the merchant is lying..."
 ```
-Example: `/secret @Rogue "Hidden Knowledge" "You notice the merchant is lying..."`
-
 Only that player can see their secrets.
 
 ### View Your Handouts
 ```
-/viewhandouts
+/handout action:view
 ```
 Shows all handouts shared with you.
 
 ### Read a Handout
 ```
-/readhandout <handout_id>
+/handout action:read handout_id:1
 ```
 
 ### Check Your Secrets
@@ -1706,18 +1709,23 @@ Shows secrets only you can see.
 
 ### DM: View All Handouts
 ```
-/dmhandouts
+/handout action:list-all
 ```
 
 ### DM: Reveal a Handout
 ```
-/revealhandout <handout_id>
+/handout action:reveal handout_id:1
 ```
 Makes a hidden handout visible to everyone.
 
 ### DM: Share with Player
 ```
-/sharehandout <handout_id> <player>
+/handout action:share handout_id:1 player:@username
+```
+
+### DM: Delete a Handout
+```
+/handout action:delete handout_id:1
 ```
 
 ---

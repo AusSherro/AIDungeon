@@ -108,42 +108,51 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 ### NPCs & Factions
 | Command | Description |
 |---------|-------------|
-| `/npc` | View all NPCs in the campaign |
-| `/npc name:"Name" description:"..."` | Create or update an NPC |
-| `/npcdisposition name:NPC change:1` | Modify NPC disposition toward party |
-| `/faction` | View all factions and party standings |
-| `/faction name:"Name" description:"..."` | Create a new faction |
-| `/reputation faction:"Name" change:10` | Modify party reputation with faction |
-| `/shop merchant:"Name"` | View merchant's shop inventory |
-| `/buy merchant:"Name" item:"Item" quantity:1` | Buy from a merchant |
-| `/sell merchant:"Name" item:"Item" base_price:10` | Sell to a merchant |
+| `/npc action:list` | View all NPCs in the campaign |
+| `/npc action:view name:"Name"` | View specific NPC details |
+| `/npc action:create name:"Name" description:"..."` | Create or update an NPC |
+| `/npc action:disposition name:"NPC" change:1` | Modify NPC disposition toward party |
+| `/npc action:factions` | View all factions and party standings |
+| `/npc action:faction-view name:"Faction"` | View specific faction details |
+| `/npc action:faction-create name:"Name" description:"..."` | Create a new faction |
+| `/npc action:reputation faction:"Name" change:10` | Modify party reputation with faction |
+| `/shop action:view merchant:"Name"` | View merchant's shop inventory |
+| `/shop action:create merchant:"Name" shop_type:general` | Create a new shop for NPC |
+| `/shop action:buy merchant:"Name" item:"Item" quantity:1` | Buy from a merchant |
+| `/shop action:sell merchant:"Name" item:"Item" base_price:10` | Sell to a merchant |
 
 ### Quest Tracking
 | Command | Description |
 |---------|-------------|
-| `/quests` | View full quest log |
-| `/quest name:"Name"` | View specific quest details |
-| `/quest name:"Name" description:"..."` | Create a new quest |
-| `/questcomplete quest_name:"Name"` | Mark quest as completed |
-| `/questabandon quest_name:"Name"` | Abandon an active quest |
-| `/questobjective quest_name:"Name" objective:"..."` | Add objective to quest |
-| `/questprogress quest_name:"Name" objective_number:1` | Update objective progress |
-| `/questnote quest_name:"Name" note:"..."` | Add note to a quest |
-| `/questtemplate template:bounty name:"..." description:"..."` | Create from template |
+| `/quest action:list` | View full quest log |
+| `/quest action:view name:"Name"` | View specific quest details |
+| `/quest action:create name:"Name" description:"..."` | Create a new quest |
+| `/quest action:complete name:"Name"` | Mark quest as completed |
+| `/quest action:abandon name:"Name"` | Abandon an active quest |
+| `/quest action:objective name:"Name" objective:"..."` | Add objective to quest |
+| `/quest action:progress name:"Name" objective_number:1` | Update objective progress |
+| `/quest action:note name:"Name" note:"..."` | Add note to a quest |
+| `/quest action:template template:bounty name:"..."` | Create from template |
+| `/quest action:rumors` | View all heard rumors |
+| `/quest action:investigate-rumor rumor_number:1 name:"..."` | Convert rumor to quest |
+| `/quest action:chain parent:"Quest1" child:"Quest2"` | Link quests in sequence |
+| `/quest action:accept name:"Quest"` | Accept an available quest |
 
 ### Travel & World Map
 | Command | Description |
 |---------|-------------|
-| `/worldmap` | View all discovered locations and connections |
-| `/fasttravel destination:"Phandalin"` | Fast travel to a visited location |
-| `/addlocation name:"Tower" terrain:hills type:ruins` | Add location to world map |
-| `/setlocation location:"Phandalin"` | Set current location |
-| `/locationinfo location:"Cave"` | View detailed location info |
-| `/travel destination:"Town" distance:30` | Start manual travel (optional) |
-| `/travelstatus` | Check current travel progress |
-| `/traveladvance hours:4` | Advance travel by hours |
-| `/randomencounter difficulty:medium` | Generate combat encounter |
-| `/encounter event_type:social` | Generate non-combat encounter |
+| `/worldmap action:view` | View all discovered locations and connections |
+| `/worldmap action:fast-travel destination:"Phandalin"` | Fast travel to a visited location |
+| `/worldmap action:add-location name:"Tower" terrain:hills` | Add location to world map |
+| `/worldmap action:set-location location:"Phandalin"` | Set current location |
+| `/worldmap action:location-info location:"Cave"` | View detailed location info |
+| `/travel action:start destination:"Town" distance:30` | Start manual travel |
+| `/travel action:status` | Check current travel progress |
+| `/travel action:advance hours:4` | Advance travel by hours |
+| `/travel action:cancel` | Cancel current journey |
+| `/encounter action:random-combat difficulty:medium` | Generate combat encounter |
+| `/encounter action:social terrain:road` | Generate non-combat encounter |
+| `/encounter action:check hours:4 terrain:forest` | Roll for random encounter |
 
 > **Intelligent Travel:** Just use `/do We head to Phandalin` - the AI automatically detects travel intent and narrates the journey using structured tags!
 
@@ -156,8 +165,8 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 | `/trap action:create name:"Pit Trap"` | Create a custom trap |
 | `/trap action:create template:poison_dart` | Create from 10 pre-built templates |
 | `/trap action:list` | View all traps in the area |
-| `/detecttrap trap_name:"Name" roll:18` | Attempt to detect a trap |
-| `/disarmtrap trap_name:"Name" roll:15` | Attempt to disarm a trap |
+| `/trap action:detect name:"Name" roll:18` | Attempt to detect a trap |
+| `/trap action:disarm name:"Name" roll:15` | Attempt to disarm a trap |
 | `/weather weather_type:rain` | Set weather (14 types: rain, fog, blizzard, etc.) |
 | `/lighting light_level:dim` | Set lighting (bright, dim, darkness, magical_darkness) |
 | `/hazard action:create name:"Fire" hazard_type:fire` | Create environmental hazard |
@@ -175,12 +184,12 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 ### Session Management
 | Command | Description |
 |---------|-------------|
-| `/session` | View current session status (duration, phase, activity) |
+| `/session action:view` | View current session status (duration, phase, activity) |
 | `/session action:end` | End session and generate summary |
 | `/session action:pause` | Pause session |
-| `/sessionrecap` | Get TTS recap of previous session |
-| `/sessionhistory` | View past session summaries |
-| `/recover` | Recover from a crashed session |
+| `/session action:recap` | Get TTS recap of the previous session |
+| `/session action:history` | View past session summaries |
+| `/session action:recover` | Recover from a crashed session |
 
 > **Auto-Resume:** When players join a voice channel, the bot detects if they have a campaign and offers to resume! Sessions are automatically saved every 5 minutes.
 
@@ -211,27 +220,28 @@ A voice-enabled AI Dungeon Master for D&D 5e using GPT-4o and ElevenLabs TTS (wi
 ### Tactical Maps
 | Command | Description |
 |---------|-------------|
-| `/newmap` | Create a new battle map (dungeon, forest, tavern, cave) |
-| `/map` | View the current tactical map |
-| `/addtoken` | Add a character/enemy token to the map |
-| `/movetoken` | Move a token to a new position |
-| `/removetoken` | Remove a token from the map |
-| `/distance` | Measure distance between two tokens |
-| `/inrange` | Find all tokens within range |
-| `/setterrain` | Set terrain at a position |
-| `/clearmap` | Delete the current map |
+| `/map action:view` | View the current tactical map |
+| `/map action:create name:"room" width:10 height:10` | Create a new battle map |
+| `/map action:add-token name:"Thorin" x:5 y:5 token_type:player` | Add a token to the map |
+| `/map action:move token_name:"Thorin" x:7 y:5` | Move a token to a new position |
+| `/map action:remove token_name:"Goblin1"` | Remove a token from the map |
+| `/map action:distance token1:"Thorin" token2:"Goblin1"` | Measure distance between tokens |
+| `/map action:range token_name:"Thorin" range_feet:30` | Find all tokens within range |
+| `/map action:terrain x:5 y:5 terrain_type:difficult` | Set terrain at a position |
+| `/map action:clear` | Delete the current map |
 
 ### Handouts & Secrets
 | Command | Description |
 |---------|-------------|
-| `/handout` | Create a handout (note, letter, map, etc.) |
-| `/secret` | Send a secret message to one player |
-| `/viewhandouts` | View handouts shared with you |
-| `/readhandout` | Read a specific handout |
+| `/handout action:create title:"..." content:"..."` | Create a handout (note, letter, map, etc.) |
+| `/handout action:view` | View handouts shared with you |
+| `/handout action:read handout_id:1` | Read a specific handout |
+| `/handout action:list-all` | [DM] View all campaign handouts |
+| `/handout action:reveal handout_id:1` | [DM] Reveal handout to all |
+| `/handout action:share handout_id:1 player:@user` | [DM] Share with specific player |
+| `/handout action:delete handout_id:1` | [DM] Delete a handout |
+| `/secret player:@user title:"..." content:"..."` | Send a secret message to one player |
 | `/mysecrets` | View secret messages for you |
-| `/dmhandouts` | [DM] View all campaign handouts |
-| `/revealhandout` | [DM] Reveal handout to all |
-| `/sharehandout` | [DM] Share with specific player |
 
 ---
 
