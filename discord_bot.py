@@ -1327,37 +1327,63 @@ async def remember_cmd(
 
 
 # =============================================================================
-# NPC & FACTION COMMANDS
+# NPC & FACTION COMMANDS (Consolidated)
 # =============================================================================
 
 NPC_ROLES = ["generic", "quest_giver", "merchant", "innkeeper", "guard", "noble", "villain", "ally", "informant"]
 SHOP_TYPES = ["general", "weapons", "armor", "potions", "magic"]
 
-@bot.tree.command(name="npc", description="View or manage NPCs in the campaign")
+NPC_ACTION_CHOICES = [
+    app_commands.Choice(name="📋 List - View all NPCs", value="list"),
+    app_commands.Choice(name="👤 View - View NPC details", value="view"),
+    app_commands.Choice(name="➕ Create - Create a new NPC", value="create"),
+    app_commands.Choice(name="💭 Disposition - Change NPC disposition", value="disposition"),
+    app_commands.Choice(name="⚔️ Factions - List all factions", value="factions"),
+    app_commands.Choice(name="🏰 Faction View - View faction details", value="faction-view"),
+    app_commands.Choice(name="🆕 Faction Create - Create a faction", value="faction-create"),
+    app_commands.Choice(name="📊 Reputation - Modify faction standing", value="reputation"),
+]
+
+@bot.tree.command(name="npc", description="Manage NPCs and factions")
 @app_commands.describe(
-    name="NPC name to view or create",
-    description="Description for new NPC",
+    action="What to do",
+    name="NPC or faction name",
+    description="Description for new NPC/faction",
     role="NPC's role in the world",
-    location="Where the NPC is located"
+    location="Where the NPC is located",
+    change="Disposition/reputation change amount",
+    leader="Faction leader name",
+    headquarters="Faction headquarters",
+    reason="Reason for reputation change"
 )
-@app_commands.choices(role=[app_commands.Choice(name=r.replace('_', ' ').title(), value=r) for r in NPC_ROLES])
+@app_commands.choices(
+    action=NPC_ACTION_CHOICES,
+    role=[app_commands.Choice(name=r.replace('_', ' ').title(), value=r) for r in NPC_ROLES]
+)
 async def npc_cmd(
     interaction: discord.Interaction,
-    name: str = "",
-    description: str = "",
-    role: str = "",
-    location: str = ""
+    action: str = "list",
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    role: str = "generic",
+    location: Optional[str] = None,
+    change: Optional[int] = None,
+    leader: Optional[str] = None,
+    headquarters: Optional[str] = None,
+    reason: Optional[str] = None
 ):
-    """View NPC list, details, or create/update an NPC."""
+    """Consolidated NPC and faction management."""
     channel_id = str(interaction.channel.id)
     
-    if not name:
-        # List all NPCs
+    # ─────────────────────────────────────────────────────────────────────────
+    # LIST - View all NPCs
+    # ─────────────────────────────────────────────────────────────────────────
+    if action == "list":
         npcs = list_all_npcs(channel_id)
         if not npcs:
             await interaction.response.send_message(
                 "📋 No NPCs registered yet.\n"
-                "NPCs are auto-detected from AI narration, or use `/npc name:\"NPC Name\" description:\"...\"` to add manually.",
+                "NPCs are auto-detected from AI narration, or use `/npc action:create name:\"NPC Name\" description:\"...\"`",
                 ephemeral=True
             )
             return
@@ -1368,7 +1394,7 @@ async def npc_cmd(
             color=discord.Color.blue()
         )
         
-        for npc in npcs[:25]:  # Discord limit
+        for npc in npcs[:25]:
             disp_names = {-2: "⚔️", -1: "😠", 0: "😐", 1: "😊", 2: "💚"}
             disp_icon = disp_names.get(npc.disposition, "😐")
             role_text = npc.role.replace('_', ' ').title() if npc.role else "Unknown"
@@ -1386,124 +1412,121 @@ async def npc_cmd(
             )
         
         await interaction.response.send_message(embed=embed)
-    else:
-        # View or create specific NPC
-        npc = get_npc(channel_id, name)
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # VIEW - View NPC details
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "view":
+        if not name:
+            await interaction.response.send_message("❌ Required: `name`", ephemeral=True)
+            return
         
-        if npc and not description:
-            # View existing NPC
-            embed = discord.Embed(
-                title=f"👤 {npc.name}",
-                description=npc.description or "*No description*",
-                color=discord.Color.green() if npc.disposition > 0 else 
-                      discord.Color.red() if npc.disposition < 0 else 
-                      discord.Color.light_grey()
-            )
-            
-            disp_names = {-2: "Hostile", -1: "Unfriendly", 0: "Neutral", 1: "Friendly", 2: "Allied"}
-            embed.add_field(name="Race", value=npc.race.title(), inline=True)
-            embed.add_field(name="Role", value=npc.role.replace('_', ' ').title(), inline=True)
-            embed.add_field(name="Status", value=npc.status.title(), inline=True)
-            embed.add_field(name="Disposition", value=disp_names.get(npc.disposition, "Neutral"), inline=True)
-            embed.add_field(name="Mood", value=npc.current_mood.title(), inline=True)
-            
-            if npc.location:
-                embed.add_field(name="Location", value=npc.location, inline=True)
-            
-            if npc.memory.knows_names:
-                embed.add_field(name="Knows Players", value=", ".join(npc.memory.knows_names), inline=False)
-            
-            if npc.memory.knows_facts:
-                embed.add_field(name="Knows Facts", value="\n".join(f"• {f}" for f in npc.memory.knows_facts[-5:]), inline=False)
-            
-            if npc.factions:
-                faction_text = "\n".join(f"• {f}: {get_standing_title(s)}" for f, s in npc.factions.items())
-                embed.add_field(name="Faction Affiliations", value=faction_text, inline=False)
-            
-            if npc.dialogue_state.offered_quests:
-                embed.add_field(name="Offered Quests", value=", ".join(npc.dialogue_state.offered_quests), inline=False)
-            
-            if npc.shop:
-                embed.add_field(name="Shop", value=f"🏪 {npc.shop.shop_name} ({npc.shop.shop_type.title()})", inline=False)
-            
-            embed.set_footer(text=f"Interactions: {npc.memory.interaction_count} | Voice: {npc.voice_archetype or 'Default'}")
-            
-            await interaction.response.send_message(embed=embed)
-        else:
-            # Create or update NPC
-            state = load_state(channel_id)
-            current_location = location or state.get("location", "")
-            
-            npc = create_npc(
-                channel_id,
-                name=name,
-                description=description,
-                role=role or "generic",
-                location=current_location
-            )
-            
-            # Also add to legacy state for backwards compatibility
-            add_or_update_npc(state, name, description)
-            save_state(channel_id, state)
-            
+        npc = get_npc(channel_id, name)
+        if not npc:
+            await interaction.response.send_message(f"❌ NPC **{name}** not found.", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title=f"👤 {npc.name}",
+            description=npc.description or "*No description*",
+            color=discord.Color.green() if npc.disposition > 0 else 
+                  discord.Color.red() if npc.disposition < 0 else 
+                  discord.Color.light_grey()
+        )
+        
+        disp_names = {-2: "Hostile", -1: "Unfriendly", 0: "Neutral", 1: "Friendly", 2: "Allied"}
+        embed.add_field(name="Race", value=npc.race.title(), inline=True)
+        embed.add_field(name="Role", value=npc.role.replace('_', ' ').title(), inline=True)
+        embed.add_field(name="Status", value=npc.status.title(), inline=True)
+        embed.add_field(name="Disposition", value=disp_names.get(npc.disposition, "Neutral"), inline=True)
+        embed.add_field(name="Mood", value=npc.current_mood.title(), inline=True)
+        
+        if npc.location:
+            embed.add_field(name="Location", value=npc.location, inline=True)
+        
+        if npc.memory.knows_names:
+            embed.add_field(name="Knows Players", value=", ".join(npc.memory.knows_names), inline=False)
+        
+        if npc.memory.knows_facts:
+            embed.add_field(name="Knows Facts", value="\n".join(f"• {f}" for f in npc.memory.knows_facts[-5:]), inline=False)
+        
+        if npc.factions:
+            faction_text = "\n".join(f"• {f}: {get_standing_title(s)}" for f, s in npc.factions.items())
+            embed.add_field(name="Faction Affiliations", value=faction_text, inline=False)
+        
+        if npc.dialogue_state.offered_quests:
+            embed.add_field(name="Offered Quests", value=", ".join(npc.dialogue_state.offered_quests), inline=False)
+        
+        if npc.shop:
+            embed.add_field(name="Shop", value=f"🏪 {npc.shop.shop_name} ({npc.shop.shop_type.title()})", inline=False)
+        
+        embed.set_footer(text=f"Interactions: {npc.memory.interaction_count} | Voice: {npc.voice_archetype or 'Default'}")
+        
+        await interaction.response.send_message(embed=embed)
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # CREATE - Create a new NPC
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "create":
+        if not name:
+            await interaction.response.send_message("❌ Required: `name`", ephemeral=True)
+            return
+        
+        state = load_state(channel_id)
+        current_location = location or state.get("location", "")
+        
+        npc = create_npc(
+            channel_id,
+            name=name,
+            description=description or "",
+            role=role,
+            location=current_location
+        )
+        
+        # Also add to legacy state for backwards compatibility
+        add_or_update_npc(state, name, description or "")
+        save_state(channel_id, state)
+        
+        await interaction.response.send_message(
+            f"👤 **{npc.name}** registered!\n"
+            f"Role: {npc.role.replace('_', ' ').title()} | Race: {npc.race.title()}\n"
+            f"Voice: {npc.voice_archetype or 'Default'}"
+        )
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # DISPOSITION - Change NPC disposition
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "disposition":
+        if not name or change is None:
             await interaction.response.send_message(
-                f"👤 **{npc.name}** registered!\n"
-                f"Role: {npc.role.replace('_', ' ').title()} | Race: {npc.race.title()}\n"
-                f"Voice: {npc.voice_archetype or 'Default'}"
+                "❌ Required: `name`, `change`\n"
+                "Example: `/npc action:disposition name:Gundren change:1`",
+                ephemeral=True
             )
-
-
-@bot.tree.command(name="npcdisposition", description="Change an NPC's disposition toward the party")
-@app_commands.describe(
-    name="NPC name",
-    change="Amount to change disposition (-2 to +2)"
-)
-async def npc_disposition_cmd(
-    interaction: discord.Interaction,
-    name: str,
-    change: int
-):
-    """Modify an NPC's disposition toward the party."""
-    channel_id = str(interaction.channel.id)
+            return
+        
+        npc = update_npc_disposition(channel_id, name, change)
+        if not npc:
+            await interaction.response.send_message(f"❌ NPC **{name}** not found.", ephemeral=True)
+            return
+        
+        disp_names = {-2: "Hostile ⚔️", -1: "Unfriendly 😠", 0: "Neutral 😐", 1: "Friendly 😊", 2: "Allied 💚"}
+        direction = "improved" if change > 0 else "worsened"
+        
+        await interaction.response.send_message(
+            f"💭 **{npc.name}**'s disposition has {direction}!\n"
+            f"Now: **{disp_names.get(npc.disposition, 'Neutral 😐')}**"
+        )
     
-    npc = update_npc_disposition(channel_id, name, change)
-    if not npc:
-        await interaction.response.send_message(f"❌ NPC **{name}** not found.", ephemeral=True)
-        return
-    
-    disp_names = {-2: "Hostile ⚔️", -1: "Unfriendly 😠", 0: "Neutral 😐", 1: "Friendly 😊", 2: "Allied 💚"}
-    direction = "improved" if change > 0 else "worsened"
-    
-    await interaction.response.send_message(
-        f"💭 **{npc.name}**'s disposition has {direction}!\n"
-        f"Now: **{disp_names.get(npc.disposition, 'Neutral 😐')}**"
-    )
-
-
-@bot.tree.command(name="faction", description="View or manage factions in the campaign")
-@app_commands.describe(
-    name="Faction name to view or create",
-    description="Description for new faction",
-    leader="Faction leader name",
-    headquarters="Faction headquarters location"
-)
-async def faction_cmd(
-    interaction: discord.Interaction,
-    name: str = "",
-    description: str = "",
-    leader: str = "",
-    headquarters: str = ""
-):
-    """View faction list, details, or create a faction."""
-    channel_id = str(interaction.channel.id)
-    
-    if not name:
-        # List all factions
+    # ─────────────────────────────────────────────────────────────────────────
+    # FACTIONS - List all factions
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "factions":
         factions = list_all_factions(channel_id)
         if not factions:
             await interaction.response.send_message(
                 "⚔️ No factions registered yet.\n"
-                "Use `/faction name:\"Faction Name\" description:\"...\"` to add one.",
+                "Use `/npc action:faction-create name:\"Faction Name\" description:\"...\"`",
                 ephemeral=True
             )
             return
@@ -1530,104 +1553,149 @@ async def faction_cmd(
             )
         
         await interaction.response.send_message(embed=embed)
-    else:
-        # View or create specific faction
-        faction = get_faction(channel_id, name)
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # FACTION-VIEW - View faction details
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "faction-view":
+        if not name:
+            await interaction.response.send_message("❌ Required: `name`", ephemeral=True)
+            return
         
-        if faction and not description:
-            # View existing faction
-            embed = discord.Embed(
-                title=f"⚔️ {faction.name}",
-                description=faction.description or "*No description*",
-                color=discord.Color.green() if faction.party_standing >= 50 else
-                      discord.Color.gold() if faction.party_standing >= 0 else
-                      discord.Color.red()
-            )
-            
-            embed.add_field(name="Standing", value=f"{faction.standing_title} ({faction.party_standing:+d})", inline=True)
-            embed.add_field(name="Alignment", value=faction.alignment.title(), inline=True)
-            
-            if faction.leader:
-                embed.add_field(name="Leader", value=faction.leader, inline=True)
-            if faction.headquarters:
-                embed.add_field(name="Headquarters", value=faction.headquarters, inline=True)
-            
-            if faction.allies:
-                embed.add_field(name="Allies", value=", ".join(faction.allies), inline=False)
-            if faction.enemies:
-                embed.add_field(name="Enemies", value=", ".join(faction.enemies), inline=False)
-            
-            await interaction.response.send_message(embed=embed)
-        else:
-            # Create faction
-            faction = create_faction(
-                channel_id,
-                name=name,
-                description=description,
-                leader=leader,
-                headquarters=headquarters
-            )
-            
+        faction = get_faction(channel_id, name)
+        if not faction:
+            await interaction.response.send_message(f"❌ Faction **{name}** not found.", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title=f"⚔️ {faction.name}",
+            description=faction.description or "*No description*",
+            color=discord.Color.green() if faction.party_standing >= 50 else
+                  discord.Color.gold() if faction.party_standing >= 0 else
+                  discord.Color.red()
+        )
+        
+        embed.add_field(name="Standing", value=f"{faction.standing_title} ({faction.party_standing:+d})", inline=True)
+        embed.add_field(name="Alignment", value=faction.alignment.title(), inline=True)
+        
+        if faction.leader:
+            embed.add_field(name="Leader", value=faction.leader, inline=True)
+        if faction.headquarters:
+            embed.add_field(name="Headquarters", value=faction.headquarters, inline=True)
+        
+        if faction.allies:
+            embed.add_field(name="Allies", value=", ".join(faction.allies), inline=False)
+        if faction.enemies:
+            embed.add_field(name="Enemies", value=", ".join(faction.enemies), inline=False)
+        
+        await interaction.response.send_message(embed=embed)
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # FACTION-CREATE - Create a faction
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "faction-create":
+        if not name:
+            await interaction.response.send_message("❌ Required: `name`", ephemeral=True)
+            return
+        
+        faction = create_faction(
+            channel_id,
+            name=name,
+            description=description or "",
+            leader=leader or "",
+            headquarters=headquarters or ""
+        )
+        
+        await interaction.response.send_message(
+            f"⚔️ **{faction.name}** faction created!\n"
+            f"Starting standing: {faction.standing_title}"
+        )
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # REPUTATION - Modify faction standing
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "reputation":
+        if not name or change is None:
             await interaction.response.send_message(
-                f"⚔️ **{faction.name}** faction created!\n"
-                f"Starting standing: {faction.standing_title}"
+                "❌ Required: `name` (faction), `change`\n"
+                "Example: `/npc action:reputation name:\"Thieves Guild\" change:10`",
+                ephemeral=True
             )
+            return
+        
+        result = modify_faction_standing(channel_id, name, change, reason or "")
+        if not result:
+            await interaction.response.send_message(f"❌ Faction **{name}** not found.", ephemeral=True)
+            return
+        
+        updated_faction, message = result
+        
+        color = discord.Color.green() if change > 0 else discord.Color.red()
+        embed = discord.Embed(
+            title=f"📊 Reputation Change: {updated_faction.name}",
+            description=message,
+            color=color
+        )
+        embed.add_field(name="Current Standing", value=f"{updated_faction.standing_title} ({updated_faction.party_standing:+d})")
+        
+        await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="reputation", description="Modify party reputation with a faction")
+SHOP_ACTION_CHOICES = [
+    app_commands.Choice(name="📦 View - View shop inventory", value="view"),
+    app_commands.Choice(name="➕ Create - Create a new shop", value="create"),
+    app_commands.Choice(name="💰 Buy - Purchase an item", value="buy"),
+    app_commands.Choice(name="🏷️ Sell - Sell an item", value="sell"),
+]
+
+@bot.tree.command(name="shop", description="Manage merchant shops")
 @app_commands.describe(
-    faction="Faction name",
-    change="Amount to change standing (-100 to +100)",
-    reason="Reason for the change (optional)"
-)
-async def reputation_cmd(
-    interaction: discord.Interaction,
-    faction: str,
-    change: int,
-    reason: str = ""
-):
-    """Modify the party's standing with a faction."""
-    channel_id = str(interaction.channel.id)
-    
-    result = modify_faction_standing(channel_id, faction, change, reason)
-    if not result:
-        await interaction.response.send_message(f"❌ Faction **{faction}** not found.", ephemeral=True)
-        return
-    
-    updated_faction, message = result
-    
-    color = discord.Color.green() if change > 0 else discord.Color.red()
-    embed = discord.Embed(
-        title=f"📊 Reputation Change: {updated_faction.name}",
-        description=message,
-        color=color
-    )
-    embed.add_field(name="Current Standing", value=f"{updated_faction.standing_title} ({updated_faction.party_standing:+d})")
-    
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="shop", description="View a merchant's shop or create one")
-@app_commands.describe(
+    action="What to do",
     merchant="Merchant NPC name",
-    shop_name="Name for the shop",
-    shop_type="Type of shop inventory"
+    shop_name="Name for the shop (create)",
+    shop_type="Type of shop inventory",
+    item="Item to buy/sell",
+    quantity="Quantity to buy/sell",
+    price="Base price for selling"
 )
-@app_commands.choices(shop_type=[app_commands.Choice(name=t.title(), value=t) for t in SHOP_TYPES])
+@app_commands.choices(
+    action=SHOP_ACTION_CHOICES,
+    shop_type=[app_commands.Choice(name=t.title(), value=t) for t in SHOP_TYPES]
+)
 async def shop_cmd(
     interaction: discord.Interaction,
-    merchant: str,
-    shop_name: str = "",
-    shop_type: str = ""
+    action: str = "view",
+    merchant: Optional[str] = None,
+    shop_name: Optional[str] = None,
+    shop_type: str = "general",
+    item: Optional[str] = None,
+    quantity: int = 1,
+    price: Optional[int] = None
 ):
-    """View or create a merchant's shop."""
+    """Consolidated shop management."""
     channel_id = str(interaction.channel.id)
+    user_id = str(interaction.user.id)
     
-    npc = get_npc(channel_id, merchant)
-    
-    if npc and npc.shop and not shop_type:
-        # View existing shop
-        inventory_text = format_shop_inventory(npc)
+    # ─────────────────────────────────────────────────────────────────────────
+    # VIEW - View shop inventory
+    # ─────────────────────────────────────────────────────────────────────────
+    if action == "view":
+        if not merchant:
+            await interaction.response.send_message(
+                "❌ Required: `merchant`\n"
+                "Example: `/shop action:view merchant:Gundren`",
+                ephemeral=True
+            )
+            return
+        
+        npc = get_npc(channel_id, merchant)
+        if not npc or not npc.shop:
+            await interaction.response.send_message(
+                f"❌ **{merchant}** doesn't have a shop.\n"
+                f"Use `/shop action:create merchant:{merchant}` to create one.",
+                ephemeral=True
+            )
+            return
         
         embed = discord.Embed(
             title=f"🏪 {npc.shop.shop_name}",
@@ -1635,11 +1703,10 @@ async def shop_cmd(
             color=discord.Color.gold()
         )
         
-        # Split inventory into chunks for embed
         items_text = []
-        for item in npc.shop.items:
-            if item['quantity'] > 0:
-                items_text.append(f"• **{item['name']}** - {item['price']} gp (x{item['quantity']})")
+        for shop_item in npc.shop.items:
+            if shop_item['quantity'] > 0:
+                items_text.append(f"• **{shop_item['name']}** - {shop_item['price']} gp (x{shop_item['quantity']})")
         
         if items_text:
             embed.add_field(name="📦 Inventory", value="\n".join(items_text[:15]), inline=False)
@@ -1652,10 +1719,14 @@ async def shop_cmd(
         embed.add_field(name="📊 Buy Rate", value=f"{int(npc.shop.buy_rate * 100)}%", inline=True)
         
         await interaction.response.send_message(embed=embed)
-    else:
-        # Create or update shop
-        if not shop_type:
-            shop_type = "general"
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # CREATE - Create a new shop
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "create":
+        if not merchant:
+            await interaction.response.send_message("❌ Required: `merchant`", ephemeral=True)
+            return
         
         npc = create_merchant_shop(
             channel_id,
@@ -1672,203 +1743,201 @@ async def shop_cmd(
             f"🏪 **{npc.shop.shop_name}** is now open!\n"
             f"Merchant: {npc.name}\n"
             f"Type: {shop_type.title()} Shop\n"
-            f"Use `/shop merchant:{merchant}` to view inventory."
+            f"Use `/shop action:view merchant:{merchant}` to view inventory."
         )
-
-
-@bot.tree.command(name="buy", description="Buy an item from a shop")
-@app_commands.describe(
-    merchant="Merchant NPC name",
-    item="Item name to buy",
-    quantity="Number to buy (default: 1)"
-)
-async def buy_cmd(
-    interaction: discord.Interaction,
-    merchant: str,
-    item: str,
-    quantity: int = 1
-):
-    """Buy an item from a merchant."""
-    channel_id = str(interaction.channel.id)
-    user_id = str(interaction.user.id)
     
-    result = buy_from_shop(channel_id, merchant, item, quantity)
-    if not result:
-        await interaction.response.send_message(
-            f"❌ Could not purchase **{item}**. Check that:\n"
-            f"• The merchant **{merchant}** exists and has a shop\n"
-            f"• The item is in stock\n"
-            f"• You requested a valid quantity",
-            ephemeral=True
-        )
-        return
-    
-    item_data, total_cost = result
-    
-    # Add to player inventory
-    char = load_character(user_id)
-    if char:
-        for _ in range(quantity):
-            add_inventory(user_id, item_data['name'])
-        save_character(user_id, char)
-    
-    await interaction.response.send_message(
-        f"💰 Purchased **{quantity}x {item_data['name']}** for **{total_cost} gp**!\n"
-        f"*{item_data.get('description', '')}*"
-    )
-
-
-@bot.tree.command(name="sell", description="Sell an item to a shop")
-@app_commands.describe(
-    merchant="Merchant NPC name",
-    item="Item name to sell",
-    base_price="Base price of the item in gold",
-    quantity="Number to sell (default: 1)"
-)
-async def sell_cmd(
-    interaction: discord.Interaction,
-    merchant: str,
-    item: str,
-    base_price: int,
-    quantity: int = 1
-):
-    """Sell an item to a merchant."""
-    channel_id = str(interaction.channel.id)
-    user_id = str(interaction.user.id)
-    
-    # Check player has the item
-    char = load_character(user_id)
-    if char:
-        inventory = char.get("inventory", [])
-        item_count = sum(1 for i in inventory if i.lower() == item.lower())
-        if item_count < quantity:
+    # ─────────────────────────────────────────────────────────────────────────
+    # BUY - Purchase an item
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "buy":
+        if not merchant or not item:
             await interaction.response.send_message(
-                f"❌ You only have **{item_count}x {item}** in your inventory.",
+                "❌ Required: `merchant`, `item`\n"
+                "Example: `/shop action:buy merchant:Gundren item:Longsword`",
                 ephemeral=True
             )
             return
-    
-    gold_received = sell_to_shop(channel_id, merchant, item, base_price, quantity)
-    if gold_received is None:
+        
+        result = buy_from_shop(channel_id, merchant, item, quantity)
+        if not result:
+            await interaction.response.send_message(
+                f"❌ Could not purchase **{item}**. Check that:\n"
+                f"• The merchant **{merchant}** exists and has a shop\n"
+                f"• The item is in stock\n"
+                f"• You requested a valid quantity",
+                ephemeral=True
+            )
+            return
+        
+        item_data, total_cost = result
+        
+        char = load_character(user_id)
+        if char:
+            for _ in range(quantity):
+                add_inventory(user_id, item_data['name'])
+            save_character(user_id, char)
+        
         await interaction.response.send_message(
-            f"❌ Could not sell to **{merchant}**. The shop may not have enough gold.",
-            ephemeral=True
+            f"💰 Purchased **{quantity}x {item_data['name']}** for **{total_cost} gp**!\n"
+            f"*{item_data.get('description', '')}*"
         )
-        return
     
-    # Remove from player inventory
-    if char:
-        for _ in range(quantity):
-            remove_inventory(user_id, item)
-    
-    await interaction.response.send_message(
-        f"💰 Sold **{quantity}x {item}** for **{gold_received} gp**!"
-    )
+    # ─────────────────────────────────────────────────────────────────────────
+    # SELL - Sell an item
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "sell":
+        if not merchant or not item or price is None:
+            await interaction.response.send_message(
+                "❌ Required: `merchant`, `item`, `price`\n"
+                "Example: `/shop action:sell merchant:Gundren item:Dagger price:2`",
+                ephemeral=True
+            )
+            return
+        
+        char = load_character(user_id)
+        if char:
+            inventory = char.get("inventory", [])
+            item_count = sum(1 for i in inventory if i.lower() == item.lower())
+            if item_count < quantity:
+                await interaction.response.send_message(
+                    f"❌ You only have **{item_count}x {item}** in your inventory.",
+                    ephemeral=True
+                )
+                return
+        
+        gold_received = sell_to_shop(channel_id, merchant, item, price, quantity)
+        if gold_received is None:
+            await interaction.response.send_message(
+                f"❌ Could not sell to **{merchant}**. The shop may not have enough gold.",
+                ephemeral=True
+            )
+            return
+        
+        if char:
+            for _ in range(quantity):
+                remove_inventory(user_id, item)
+        
+        await interaction.response.send_message(
+            f"💰 Sold **{quantity}x {item}** for **{gold_received} gp**!"
+        )
 
 
 # =============================================================================
-# QUEST COMMANDS
+# QUEST COMMANDS (CONSOLIDATED)
 # =============================================================================
 
 QUEST_TYPES = ["main", "side", "faction", "personal", "bounty", "fetch", "escort", "explore", "mystery"]
 QUEST_DIFFICULTIES = ["trivial", "easy", "medium", "hard", "deadly", "legendary"]
 QUEST_STATUSES = ["available", "active", "completed", "failed", "abandoned"]
 
-@bot.tree.command(name="quests", description="View your quest log")
+@bot.tree.command(name="quest", description="Manage quests - view, create, complete, and more")
 @app_commands.describe(
-    show_completed="Include completed quests in the list"
-)
-async def quests_cmd(
-    interaction: discord.Interaction,
-    show_completed: bool = False
-):
-    """View active, available, and optionally completed quests."""
-    channel_id = str(interaction.channel.id)
-    
-    quest_log = format_quest_log(channel_id, include_completed=show_completed)
-    
-    # Split into chunks if too long
-    if len(quest_log) > 1900:
-        # Send as embed for better formatting
-        embed = discord.Embed(
-            title="📜 Quest Log",
-            color=discord.Color.gold()
-        )
-        
-        active = get_active_quests(channel_id)
-        available = get_available_quests(channel_id)
-        
-        if active:
-            active_text = ""
-            for q in active[:10]:  # Limit to 10
-                progress = f"({q.get_progress()[0]}/{q.get_progress()[1]})"
-                active_text += f"• **{q.name}** {progress}\n"
-            embed.add_field(name="⚔️ Active Quests", value=active_text or "None", inline=False)
-        
-        if available:
-            avail_text = "\n".join([f"• {q.name}" for q in available[:5]])
-            embed.add_field(name="📋 Available Quests", value=avail_text, inline=False)
-        
-        if show_completed:
-            completed = get_completed_quests(channel_id)
-            if completed:
-                comp_text = "\n".join([f"✅ {q.name}" for q in completed[-5:]])
-                embed.add_field(name="✅ Completed", value=comp_text, inline=False)
-        
-        if not active and not available:
-            embed.description = "*No active quests. Use `/quest create` to add one!*"
-        
-        await interaction.response.send_message(embed=embed)
-    else:
-        await interaction.response.send_message(quest_log)
-
-
-@bot.tree.command(name="quest", description="View details of a specific quest or create a new one")
-@app_commands.describe(
-    name="Quest name to view or create",
-    description="Description for new quest",
-    quest_type="Type of quest",
-    difficulty="Quest difficulty",
+    action="Action to perform",
+    name="Quest name",
+    description="Quest description (for create)",
+    quest_type="Type of quest (for create)",
+    difficulty="Quest difficulty (for create)",
     giver="NPC who gave the quest",
-    objectives="Comma-separated list of objectives"
+    objective="Objective description (for add-objective)",
+    objective_number="Objective number (for progress)",
+    progress="Progress amount (for progress)",
+    note="Note text (for note)",
+    template="Quest template (for template)",
+    rumor_number="Rumor number (for investigate)",
+    child_quest="Child quest name (for chain)",
+    show_completed="Include completed quests (for list)"
 )
+@app_commands.choices(action=[
+    app_commands.Choice(name="list", value="list"),
+    app_commands.Choice(name="view", value="view"),
+    app_commands.Choice(name="create", value="create"),
+    app_commands.Choice(name="complete", value="complete"),
+    app_commands.Choice(name="abandon", value="abandon"),
+    app_commands.Choice(name="accept", value="accept"),
+    app_commands.Choice(name="add-objective", value="add-objective"),
+    app_commands.Choice(name="progress", value="progress"),
+    app_commands.Choice(name="note", value="note"),
+    app_commands.Choice(name="template", value="template"),
+    app_commands.Choice(name="rumors", value="rumors"),
+    app_commands.Choice(name="investigate", value="investigate"),
+    app_commands.Choice(name="chain", value="chain"),
+])
 @app_commands.choices(
     quest_type=[app_commands.Choice(name=t.replace('_', ' ').title(), value=t) for t in QUEST_TYPES],
-    difficulty=[app_commands.Choice(name=d.title(), value=d) for d in QUEST_DIFFICULTIES]
+    difficulty=[app_commands.Choice(name=d.title(), value=d) for d in QUEST_DIFFICULTIES],
+    template=[
+        app_commands.Choice(name="Bounty - Hunt a target", value="bounty"),
+        app_commands.Choice(name="Fetch - Retrieve an item", value="fetch"),
+        app_commands.Choice(name="Rescue - Save someone", value="rescue"),
+        app_commands.Choice(name="Investigate - Solve a mystery", value="investigate"),
+        app_commands.Choice(name="Clear Dungeon - Clear all threats", value="clear_dungeon"),
+        app_commands.Choice(name="Escort - Protect during journey", value="escort")
+    ]
 )
 async def quest_cmd(
     interaction: discord.Interaction,
+    action: str = "list",
     name: str = "",
     description: str = "",
     quest_type: str = "side",
     difficulty: str = "medium",
     giver: str = "",
-    objectives: str = ""
+    objective: str = "",
+    objective_number: int = 1,
+    progress: int = 1,
+    note: str = "",
+    template: str = "",
+    rumor_number: int = 0,
+    child_quest: str = "",
+    show_completed: bool = False
 ):
-    """View quest details or create a new quest."""
+    """Consolidated quest management command."""
     channel_id = str(interaction.channel.id)
     
-    if not name:
-        # Show help or list
-        await interaction.response.send_message(
-            "**Quest Commands:**\n"
-            "• `/quests` - View all quests\n"
-            "• `/quest <name>` - View specific quest\n"
-            "• `/quest <name> description:<desc>` - Create new quest\n"
-            "• `/questcomplete <name>` - Complete a quest\n"
-            "• `/questabandon <name>` - Abandon a quest\n"
-            "• `/questobjective <quest> <objective>` - Add objective\n"
-            "• `/questnote <quest> <note>` - Add note to quest",
-            ephemeral=True
-        )
-        return
+    # === LIST ===
+    if action == "list":
+        quest_log = format_quest_log(channel_id, include_completed=show_completed)
+        
+        if len(quest_log) > 1900:
+            embed = discord.Embed(title="📜 Quest Log", color=discord.Color.gold())
+            
+            active = get_active_quests(channel_id)
+            available = get_available_quests(channel_id)
+            
+            if active:
+                active_text = ""
+                for q in active[:10]:
+                    prog = f"({q.get_progress()[0]}/{q.get_progress()[1]})"
+                    active_text += f"• **{q.name}** {prog}\n"
+                embed.add_field(name="⚔️ Active Quests", value=active_text or "None", inline=False)
+            
+            if available:
+                avail_text = "\n".join([f"• {q.name}" for q in available[:5]])
+                embed.add_field(name="📋 Available Quests", value=avail_text, inline=False)
+            
+            if show_completed:
+                completed = get_completed_quests(channel_id)
+                if completed:
+                    comp_text = "\n".join([f"✅ {q.name}" for q in completed[-5:]])
+                    embed.add_field(name="✅ Completed", value=comp_text, inline=False)
+            
+            if not active and not available:
+                embed.description = "*No active quests. Use `/quest action:create` to add one!*"
+            
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message(quest_log)
     
-    # Check if quest exists
-    existing = get_quest_by_name(channel_id, name)
-    
-    if existing and not description:
-        # View existing quest
-        summary = format_quest_summary(existing, show_rewards=True)
+    # === VIEW ===
+    elif action == "view":
+        if not name:
+            await interaction.response.send_message("❌ Specify a quest name with `name:`", ephemeral=True)
+            return
+        
+        existing = get_quest_by_name(channel_id, name)
+        if not existing:
+            await interaction.response.send_message(f"❌ Quest **{name}** not found.", ephemeral=True)
+            return
         
         embed = discord.Embed(
             title=f"📜 {existing.name}",
@@ -1876,17 +1945,11 @@ async def quest_cmd(
             color=discord.Color.gold() if existing.status == "active" else discord.Color.green()
         )
         
-        # Status
         status_emoji = {"active": "⚔️", "completed": "✅", "failed": "❌", "available": "📋", "abandoned": "🚫"}
-        embed.add_field(
-            name="Status",
-            value=f"{status_emoji.get(existing.status, '📜')} {existing.status.title()}",
-            inline=True
-        )
+        embed.add_field(name="Status", value=f"{status_emoji.get(existing.status, '📜')} {existing.status.title()}", inline=True)
         embed.add_field(name="Type", value=existing.quest_type.title(), inline=True)
         embed.add_field(name="Difficulty", value=existing.difficulty.title(), inline=True)
         
-        # Objectives
         objs = existing.get_objectives()
         if objs:
             obj_text = ""
@@ -1902,7 +1965,6 @@ async def quest_cmd(
             if obj_text:
                 embed.add_field(name="Objectives", value=obj_text, inline=False)
         
-        # Rewards
         rewards = existing.get_rewards()
         reward_parts = []
         if rewards.xp > 0:
@@ -1914,19 +1976,22 @@ async def quest_cmd(
         if reward_parts:
             embed.add_field(name="Rewards", value="\n".join(reward_parts), inline=False)
         
-        # Quest giver
         if existing.giver_npc:
             embed.set_footer(text=f"Quest Giver: {existing.giver_npc}")
         
-        # Notes
         if existing.notes:
             embed.add_field(name="Notes", value="\n".join(existing.notes[-3:]), inline=False)
         
         await interaction.response.send_message(embed=embed)
     
-    elif description:
-        # Create new quest
-        obj_list = [o.strip() for o in objectives.split(",")] if objectives else None
+    # === CREATE ===
+    elif action == "create":
+        if not name:
+            await interaction.response.send_message("❌ Specify a quest name with `name:`", ephemeral=True)
+            return
+        if not description:
+            await interaction.response.send_message("❌ Specify a description with `description:`", ephemeral=True)
+            return
         
         new_quest = create_quest(
             channel_id=channel_id,
@@ -1934,8 +1999,7 @@ async def quest_cmd(
             description=description,
             quest_type=quest_type,
             difficulty=difficulty,
-            giver_npc=giver,
-            objectives=obj_list
+            giver_npc=giver
         )
         
         embed = discord.Embed(
@@ -1945,493 +2009,291 @@ async def quest_cmd(
         )
         embed.add_field(name="Type", value=new_quest.quest_type.title(), inline=True)
         embed.add_field(name="Difficulty", value=new_quest.difficulty.title(), inline=True)
-        
         rewards = new_quest.get_rewards()
         embed.add_field(name="Base Rewards", value=f"⭐ {rewards.xp} XP, 💰 {rewards.gold} gp", inline=True)
         
         await interaction.response.send_message(embed=embed)
     
-    else:
-        await interaction.response.send_message(
-            f"❌ Quest **{name}** not found. Add a description to create it.",
-            ephemeral=True
-        )
-
-
-@bot.tree.command(name="questcomplete", description="Mark a quest as completed")
-@app_commands.describe(
-    quest_name="Name of the quest to complete"
-)
-async def quest_complete_cmd(
-    interaction: discord.Interaction,
-    quest_name: str
-):
-    """Complete a quest and award rewards."""
-    channel_id = str(interaction.channel.id)
-    
-    quest = get_quest_by_name(channel_id, quest_name)
-    if not quest:
-        await interaction.response.send_message(
-            f"❌ Quest **{quest_name}** not found.",
-            ephemeral=True
-        )
-        return
-    
-    if quest.status == "completed":
-        await interaction.response.send_message(
-            f"Quest **{quest.name}** is already completed!",
-            ephemeral=True
-        )
-        return
-    
-    success, rewards, message = complete_quest(channel_id, quest.id)
-    
-    if success:
-        embed = discord.Embed(
-            title="🎉 Quest Complete!",
-            description=f"**{quest.name}**",
-            color=discord.Color.green()
-        )
+    # === COMPLETE ===
+    elif action == "complete":
+        if not name:
+            await interaction.response.send_message("❌ Specify a quest name with `name:`", ephemeral=True)
+            return
         
-        if rewards:
-            reward_text = []
-            if rewards.xp > 0:
-                reward_text.append(f"⭐ **{rewards.xp}** Experience Points")
-            if rewards.gold > 0:
-                reward_text.append(f"💰 **{rewards.gold}** Gold Pieces")
-            if rewards.items:
-                reward_text.append(f"🎁 **Items:** {', '.join(rewards.items)}")
-            if rewards.reputation:
-                for faction, change in rewards.reputation.items():
-                    sign = "+" if change > 0 else ""
-                    reward_text.append(f"🏛️ **{faction}:** {sign}{change} reputation")
-            if rewards.special:
-                reward_text.append(f"✨ {rewards.special}")
-            
-            if reward_text:
-                embed.add_field(name="Rewards", value="\n".join(reward_text), inline=False)
+        quest = get_quest_by_name(channel_id, name)
+        if not quest:
+            await interaction.response.send_message(f"❌ Quest **{name}** not found.", ephemeral=True)
+            return
         
-        await interaction.response.send_message(embed=embed)
-    else:
-        await interaction.response.send_message(f"❌ {message}", ephemeral=True)
-
-
-@bot.tree.command(name="questabandon", description="Abandon a quest")
-@app_commands.describe(
-    quest_name="Name of the quest to abandon"
-)
-async def quest_abandon_cmd(
-    interaction: discord.Interaction,
-    quest_name: str
-):
-    """Abandon a quest (player choice to give up)."""
-    channel_id = str(interaction.channel.id)
-    
-    quest = get_quest_by_name(channel_id, quest_name)
-    if not quest:
-        await interaction.response.send_message(
-            f"❌ Quest **{quest_name}** not found.",
-            ephemeral=True
-        )
-        return
-    
-    if quest.status != "active":
-        await interaction.response.send_message(
-            f"Quest **{quest.name}** is not active (status: {quest.status}).",
-            ephemeral=True
-        )
-        return
-    
-    if abandon_quest(channel_id, quest.id):
-        await interaction.response.send_message(
-            f"🚫 **Quest Abandoned:** {quest.name}\n*You can always pick it up again later if available.*"
-        )
-    else:
-        await interaction.response.send_message("❌ Failed to abandon quest.", ephemeral=True)
-
-
-@bot.tree.command(name="questobjective", description="Add an objective to a quest")
-@app_commands.describe(
-    quest_name="Name of the quest",
-    objective="Description of the objective",
-    required="Number required (for 'kill 5 goblins' style objectives)",
-    is_optional="Whether this objective is optional"
-)
-async def quest_objective_cmd(
-    interaction: discord.Interaction,
-    quest_name: str,
-    objective: str,
-    required: int = 1,
-    is_optional: bool = False
-):
-    """Add a new objective to an existing quest."""
-    channel_id = str(interaction.channel.id)
-    
-    quest = get_quest_by_name(channel_id, quest_name)
-    if not quest:
-        await interaction.response.send_message(
-            f"❌ Quest **{quest_name}** not found.",
-            ephemeral=True
-        )
-        return
-    
-    new_obj = add_objective(
-        channel_id=channel_id,
-        quest_id=quest.id,
-        description=objective,
-        required=required,
-        is_optional=is_optional
-    )
-    
-    if new_obj:
-        opt = " *(optional)*" if is_optional else ""
-        req = f" (0/{required})" if required > 1 else ""
-        await interaction.response.send_message(
-            f"✅ Added objective to **{quest.name}**:\n☐ {objective}{req}{opt}"
-        )
-    else:
-        await interaction.response.send_message("❌ Failed to add objective.", ephemeral=True)
-
-
-@bot.tree.command(name="questprogress", description="Update progress on a quest objective")
-@app_commands.describe(
-    quest_name="Name of the quest",
-    objective_number="Objective number (1, 2, 3...)",
-    progress="Amount of progress to add"
-)
-async def quest_progress_cmd(
-    interaction: discord.Interaction,
-    quest_name: str,
-    objective_number: int,
-    progress: int = 1
-):
-    """Add progress to a quest objective."""
-    channel_id = str(interaction.channel.id)
-    
-    quest = get_quest_by_name(channel_id, quest_name)
-    if not quest:
-        await interaction.response.send_message(
-            f"❌ Quest **{quest_name}** not found.",
-            ephemeral=True
-        )
-        return
-    
-    obj_id = f"obj_{objective_number}"
-    completed, message = update_objective_progress(channel_id, quest.id, obj_id, progress)
-    
-    if message:
-        if completed:
-            # Check if quest is fully complete
-            updated = get_quest(channel_id, quest.id)
-            if updated and updated.is_complete():
-                success, rewards, comp_msg = complete_quest(channel_id, quest.id)
-                if success:
-                    msg = f"{message}\n\n🎉 **Quest Complete: {quest.name}!**"
-                    if rewards and rewards.xp > 0:
-                        msg += f"\nRewards: ⭐ {rewards.xp} XP, 💰 {rewards.gold} gp"
-                    await interaction.response.send_message(msg)
-                    return
+        if quest.status == "completed":
+            await interaction.response.send_message(f"Quest **{quest.name}** is already completed!", ephemeral=True)
+            return
+        
+        success, rewards, message = complete_quest(channel_id, quest.id)
+        
+        if success:
+            embed = discord.Embed(title="🎉 Quest Complete!", description=f"**{quest.name}**", color=discord.Color.green())
             
-            await interaction.response.send_message(message)
+            if rewards:
+                reward_text = []
+                if rewards.xp > 0:
+                    reward_text.append(f"⭐ **{rewards.xp}** Experience Points")
+                if rewards.gold > 0:
+                    reward_text.append(f"💰 **{rewards.gold}** Gold Pieces")
+                if rewards.items:
+                    reward_text.append(f"🎁 **Items:** {', '.join(rewards.items)}")
+                if rewards.reputation:
+                    for faction, change in rewards.reputation.items():
+                        sign = "+" if change > 0 else ""
+                        reward_text.append(f"🏛️ **{faction}:** {sign}{change} reputation")
+                if reward_text:
+                    embed.add_field(name="Rewards", value="\n".join(reward_text), inline=False)
+            
+            await interaction.response.send_message(embed=embed)
         else:
+            await interaction.response.send_message(f"❌ {message}", ephemeral=True)
+    
+    # === ABANDON ===
+    elif action == "abandon":
+        if not name:
+            await interaction.response.send_message("❌ Specify a quest name with `name:`", ephemeral=True)
+            return
+        
+        quest = get_quest_by_name(channel_id, name)
+        if not quest:
+            await interaction.response.send_message(f"❌ Quest **{name}** not found.", ephemeral=True)
+            return
+        
+        if quest.status != "active":
+            await interaction.response.send_message(f"Quest **{quest.name}** is not active (status: {quest.status}).", ephemeral=True)
+            return
+        
+        if abandon_quest(channel_id, quest.id):
+            await interaction.response.send_message(f"🚫 **Quest Abandoned:** {quest.name}\n*You can always pick it up again later if available.*")
+        else:
+            await interaction.response.send_message("❌ Failed to abandon quest.", ephemeral=True)
+    
+    # === ACCEPT ===
+    elif action == "accept":
+        if not name:
+            await interaction.response.send_message("❌ Specify a quest name with `name:`", ephemeral=True)
+            return
+        
+        quest = get_quest_by_name(channel_id, name)
+        if not quest:
+            await interaction.response.send_message(f"❌ Quest **{name}** not found.", ephemeral=True)
+            return
+        
+        if quest.status != "available":
+            await interaction.response.send_message(f"Quest **{quest.name}** is not available (status: {quest.status}).", ephemeral=True)
+            return
+        
+        if accept_quest(channel_id, quest.id):
+            embed = discord.Embed(title="⚔️ Quest Accepted!", description=f"**{quest.name}**\n{quest.description}", color=discord.Color.green())
             objectives = quest.get_objectives()
-            for obj in objectives:
-                if obj.id == obj_id:
-                    await interaction.response.send_message(
-                        f"📊 Progress updated: {obj.description} ({obj.progress}/{obj.required})"
-                    )
-                    return
-            await interaction.response.send_message("Progress updated.", ephemeral=True)
-    else:
-        await interaction.response.send_message(
-            f"❌ Objective {objective_number} not found in quest **{quest.name}**.",
-            ephemeral=True
-        )
-
-
-@bot.tree.command(name="questnote", description="Add a note to a quest")
-@app_commands.describe(
-    quest_name="Name of the quest",
-    note="Note to add"
-)
-async def quest_note_cmd(
-    interaction: discord.Interaction,
-    quest_name: str,
-    note: str
-):
-    """Add a player note to a quest."""
-    channel_id = str(interaction.channel.id)
+            if objectives:
+                obj_text = "\n".join([f"☐ {obj.description}" for obj in objectives if not obj.is_hidden])
+                if obj_text:
+                    embed.add_field(name="Objectives", value=obj_text, inline=False)
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message("❌ Failed to accept quest.", ephemeral=True)
     
-    quest = get_quest_by_name(channel_id, quest_name)
-    if not quest:
-        await interaction.response.send_message(
-            f"❌ Quest **{quest_name}** not found.",
-            ephemeral=True
-        )
-        return
+    # === ADD-OBJECTIVE ===
+    elif action == "add-objective":
+        if not name:
+            await interaction.response.send_message("❌ Specify a quest name with `name:`", ephemeral=True)
+            return
+        if not objective:
+            await interaction.response.send_message("❌ Specify an objective with `objective:`", ephemeral=True)
+            return
+        
+        quest = get_quest_by_name(channel_id, name)
+        if not quest:
+            await interaction.response.send_message(f"❌ Quest **{name}** not found.", ephemeral=True)
+            return
+        
+        new_obj = add_objective(channel_id=channel_id, quest_id=quest.id, description=objective, required=progress)
+        
+        if new_obj:
+            req = f" (0/{progress})" if progress > 1 else ""
+            await interaction.response.send_message(f"✅ Added objective to **{quest.name}**:\n☐ {objective}{req}")
+        else:
+            await interaction.response.send_message("❌ Failed to add objective.", ephemeral=True)
     
-    if add_note_to_quest(channel_id, quest.id, note):
-        await interaction.response.send_message(
-            f"📝 Note added to **{quest.name}**:\n*{note}*"
-        )
-    else:
-        await interaction.response.send_message("❌ Failed to add note.", ephemeral=True)
-
-
-@bot.tree.command(name="questtemplate", description="Create a quest from a template")
-@app_commands.describe(
-    template="Quest template to use",
-    name="Name for the quest",
-    description="Quest description",
-    giver="NPC who gave the quest"
-)
-@app_commands.choices(template=[
-    app_commands.Choice(name="Bounty - Hunt a target", value="bounty"),
-    app_commands.Choice(name="Fetch - Retrieve an item", value="fetch"),
-    app_commands.Choice(name="Rescue - Save someone", value="rescue"),
-    app_commands.Choice(name="Investigate - Solve a mystery", value="investigate"),
-    app_commands.Choice(name="Clear Dungeon - Clear all threats", value="clear_dungeon"),
-    app_commands.Choice(name="Escort - Protect during journey", value="escort")
-])
-async def quest_template_cmd(
-    interaction: discord.Interaction,
-    template: str,
-    name: str,
-    description: str,
-    giver: str = ""
-):
-    """Create a quest from a pre-defined template."""
-    channel_id = str(interaction.channel.id)
+    # === PROGRESS ===
+    elif action == "progress":
+        if not name:
+            await interaction.response.send_message("❌ Specify a quest name with `name:`", ephemeral=True)
+            return
+        
+        quest = get_quest_by_name(channel_id, name)
+        if not quest:
+            await interaction.response.send_message(f"❌ Quest **{name}** not found.", ephemeral=True)
+            return
+        
+        obj_id = f"obj_{objective_number}"
+        completed, message = update_objective_progress(channel_id, quest.id, obj_id, progress)
+        
+        if message:
+            if completed:
+                updated = get_quest(channel_id, quest.id)
+                if updated and updated.is_complete():
+                    success, rewards, comp_msg = complete_quest(channel_id, quest.id)
+                    if success:
+                        msg = f"{message}\n\n🎉 **Quest Complete: {quest.name}!**"
+                        if rewards and rewards.xp > 0:
+                            msg += f"\nRewards: ⭐ {rewards.xp} XP, 💰 {rewards.gold} gp"
+                        await interaction.response.send_message(msg)
+                        return
+                await interaction.response.send_message(message)
+            else:
+                objectives = quest.get_objectives()
+                for obj in objectives:
+                    if obj.id == obj_id:
+                        await interaction.response.send_message(f"📊 Progress updated: {obj.description} ({obj.progress}/{obj.required})")
+                        return
+                await interaction.response.send_message("Progress updated.", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ Objective {objective_number} not found in quest **{quest.name}**.", ephemeral=True)
     
-    quest = create_quest_from_template(
-        channel_id=channel_id,
-        template_name=template,
-        quest_name=name,
-        description=description,
-        giver_npc=giver
-    )
+    # === NOTE ===
+    elif action == "note":
+        if not name:
+            await interaction.response.send_message("❌ Specify a quest name with `name:`", ephemeral=True)
+            return
+        if not note:
+            await interaction.response.send_message("❌ Specify a note with `note:`", ephemeral=True)
+            return
+        
+        quest = get_quest_by_name(channel_id, name)
+        if not quest:
+            await interaction.response.send_message(f"❌ Quest **{name}** not found.", ephemeral=True)
+            return
+        
+        if add_note_to_quest(channel_id, quest.id, note):
+            await interaction.response.send_message(f"📝 Note added to **{quest.name}**:\n*{note}*")
+        else:
+            await interaction.response.send_message("❌ Failed to add note.", ephemeral=True)
     
-    if quest:
-        embed = discord.Embed(
-            title=f"📜 Quest Created: {quest.name}",
-            description=quest.description,
-            color=discord.Color.gold()
+    # === TEMPLATE ===
+    elif action == "template":
+        if not name:
+            await interaction.response.send_message("❌ Specify a quest name with `name:`", ephemeral=True)
+            return
+        if not template:
+            await interaction.response.send_message("❌ Select a template with `template:`", ephemeral=True)
+            return
+        if not description:
+            description = f"A {template.replace('_', ' ')} quest"
+        
+        quest = create_quest_from_template(
+            channel_id=channel_id,
+            template_name=template,
+            quest_name=name,
+            description=description,
+            giver_npc=giver
         )
         
-        objectives = quest.get_objectives()
-        if objectives:
-            obj_text = "\n".join([f"☐ {obj.description}" for obj in objectives])
-            embed.add_field(name="Objectives", value=obj_text, inline=False)
-        
-        rewards = quest.get_rewards()
-        embed.add_field(
-            name="Rewards",
-            value=f"⭐ {rewards.xp} XP, 💰 {rewards.gold} gp",
-            inline=True
-        )
-        embed.add_field(name="Type", value=quest.quest_type.title(), inline=True)
-        embed.add_field(name="Difficulty", value=quest.difficulty.title(), inline=True)
-        
-        if giver:
-            embed.set_footer(text=f"Quest Giver: {giver}")
-        
-        await interaction.response.send_message(embed=embed)
-    else:
-        await interaction.response.send_message(
-            f"❌ Template **{template}** not found.",
-            ephemeral=True
-        )
-
-
-# =============================================================================
-# PHASE 13: RUMOR & QUEST CHAIN COMMANDS
-# =============================================================================
-
-@bot.tree.command(name="rumors", description="View all rumors the party has heard")
-async def rumors_cmd(interaction: discord.Interaction):
-    """Display all rumors the party has heard."""
-    channel_id = str(interaction.channel.id)
-    
-    all_rumors = load_rumors(channel_id)
-    
-    if not all_rumors:
-        await interaction.response.send_message(
-            "👂 *No rumors heard yet. Talk to NPCs to learn about potential adventures!*",
-            ephemeral=True
-        )
-        return
-    
-    embed = discord.Embed(
-        title="👂 Rumors & Gossip",
-        description="*Whispers heard on your adventures...*",
-        color=discord.Color.purple()
-    )
-    
-    uninvestigated = [r for r in all_rumors if not r.get("investigated", False)]
-    investigated = [r for r in all_rumors if r.get("investigated", False)]
-    
-    if uninvestigated:
-        rumor_text = ""
-        for r in uninvestigated[-10:]:  # Last 10
-            source = f" *(from {r['source']})*" if r.get("source") else ""
-            rumor_text += f"• \"{r['text']}\"{source}\n"
-        embed.add_field(name="🔍 Uninvestigated", value=rumor_text, inline=False)
-    
-    if investigated:
-        invest_text = ""
-        for r in investigated[-5:]:  # Last 5
-            quest_note = f" → Led to quest" if r.get("led_to_quest") else ""
-            invest_text += f"• ~~{r['text']}~~{quest_note}\n"
-        embed.add_field(name="✅ Investigated", value=invest_text, inline=False)
-    
-    embed.set_footer(text="Use /investigaterumor <id> to follow up on a rumor")
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="investigaterumor", description="Investigate a rumor and create a quest from it")
-@app_commands.describe(
-    rumor_number="Number of the rumor to investigate (1, 2, 3...)",
-    quest_name="Name for the new quest",
-    description="Quest description"
-)
-async def investigate_rumor_cmd(
-    interaction: discord.Interaction,
-    rumor_number: int,
-    quest_name: str,
-    description: str = ""
-):
-    """Convert an investigated rumor into an active quest."""
-    channel_id = str(interaction.channel.id)
-    
-    rumors = get_uninvestigated_rumors(channel_id)
-    
-    if not rumors:
-        await interaction.response.send_message(
-            "❌ No uninvestigated rumors available.",
-            ephemeral=True
-        )
-        return
-    
-    if rumor_number < 1 or rumor_number > len(rumors):
-        await interaction.response.send_message(
-            f"❌ Invalid rumor number. You have {len(rumors)} uninvestigated rumors.",
-            ephemeral=True
-        )
-        return
-    
-    rumor = rumors[rumor_number - 1]
-    desc = description if description else f"Investigate: {rumor['text']}"
-    
-    quest = convert_rumor_to_quest(
-        channel_id=channel_id,
-        rumor_id=rumor["id"],
-        quest_name=quest_name,
-        description=desc
-    )
-    
-    if quest:
-        embed = discord.Embed(
-            title="🔍 Rumor Investigated!",
-            description=f"**{quest.name}**\n{quest.description}",
-            color=discord.Color.green()
-        )
-        embed.add_field(
-            name="Original Rumor",
-            value=f"*\"{rumor['text']}\"*",
-            inline=False
-        )
-        await interaction.response.send_message(embed=embed)
-    else:
-        await interaction.response.send_message(
-            "❌ Failed to create quest from rumor.",
-            ephemeral=True
-        )
-
-
-@bot.tree.command(name="questchain", description="Link two quests in sequence")
-@app_commands.describe(
-    parent_quest="Name of the first quest (prerequisite)",
-    child_quest="Name of the quest that unlocks after parent completes"
-)
-async def quest_chain_cmd(
-    interaction: discord.Interaction,
-    parent_quest: str,
-    child_quest: str
-):
-    """Link two quests so child unlocks when parent completes."""
-    channel_id = str(interaction.channel.id)
-    
-    parent = get_quest_by_name(channel_id, parent_quest)
-    child = get_quest_by_name(channel_id, child_quest)
-    
-    if not parent:
-        await interaction.response.send_message(
-            f"❌ Quest **{parent_quest}** not found.",
-            ephemeral=True
-        )
-        return
-    
-    if not child:
-        await interaction.response.send_message(
-            f"❌ Quest **{child_quest}** not found.",
-            ephemeral=True
-        )
-        return
-    
-    if link_quests(channel_id, parent.id, child.id):
-        await interaction.response.send_message(
-            f"🔗 **Quest Chain Created!**\n"
-            f"When **{parent.name}** completes, **{child.name}** will unlock automatically."
-        )
-    else:
-        await interaction.response.send_message(
-            "❌ Failed to link quests.",
-            ephemeral=True
-        )
-
-
-@bot.tree.command(name="acceptquest", description="Accept an available quest")
-@app_commands.describe(
-    quest_name="Name of the quest to accept"
-)
-async def accept_quest_cmd(
-    interaction: discord.Interaction,
-    quest_name: str
-):
-    """Accept an available quest to make it active."""
-    channel_id = str(interaction.channel.id)
-    
-    quest = get_quest_by_name(channel_id, quest_name)
-    if not quest:
-        await interaction.response.send_message(
-            f"❌ Quest **{quest_name}** not found.",
-            ephemeral=True
-        )
-        return
-    
-    if quest.status != "available":
-        await interaction.response.send_message(
-            f"Quest **{quest.name}** is not available (status: {quest.status}).",
-            ephemeral=True
-        )
-        return
-    
-    if accept_quest(channel_id, quest.id):
-        embed = discord.Embed(
-            title="⚔️ Quest Accepted!",
-            description=f"**{quest.name}**\n{quest.description}",
-            color=discord.Color.green()
-        )
-        
-        objectives = quest.get_objectives()
-        if objectives:
-            obj_text = "\n".join([f"☐ {obj.description}" for obj in objectives if not obj.is_hidden])
-            if obj_text:
+        if quest:
+            embed = discord.Embed(title=f"📜 Quest Created: {quest.name}", description=quest.description, color=discord.Color.gold())
+            objectives = quest.get_objectives()
+            if objectives:
+                obj_text = "\n".join([f"☐ {obj.description}" for obj in objectives])
                 embed.add_field(name="Objectives", value=obj_text, inline=False)
+            rewards = quest.get_rewards()
+            embed.add_field(name="Rewards", value=f"⭐ {rewards.xp} XP, 💰 {rewards.gold} gp", inline=True)
+            embed.add_field(name="Type", value=quest.quest_type.title(), inline=True)
+            if giver:
+                embed.set_footer(text=f"Quest Giver: {giver}")
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message(f"❌ Template **{template}** not found.", ephemeral=True)
+    
+    # === RUMORS ===
+    elif action == "rumors":
+        all_rumors = load_rumors(channel_id)
         
+        if not all_rumors:
+            await interaction.response.send_message("👂 *No rumors heard yet. Talk to NPCs to learn about potential adventures!*", ephemeral=True)
+            return
+        
+        embed = discord.Embed(title="👂 Rumors & Gossip", description="*Whispers heard on your adventures...*", color=discord.Color.purple())
+        
+        uninvestigated = [r for r in all_rumors if not r.get("investigated", False)]
+        investigated = [r for r in all_rumors if r.get("investigated", False)]
+        
+        if uninvestigated:
+            rumor_text = ""
+            for i, r in enumerate(uninvestigated[-10:], 1):
+                source = f" *(from {r['source']})*" if r.get("source") else ""
+                rumor_text += f"{i}. \"{r['text']}\"{source}\n"
+            embed.add_field(name="🔍 Uninvestigated", value=rumor_text, inline=False)
+        
+        if investigated:
+            invest_text = ""
+            for r in investigated[-5:]:
+                quest_note = f" → Led to quest" if r.get("led_to_quest") else ""
+                invest_text += f"• ~~{r['text']}~~{quest_note}\n"
+            embed.add_field(name="✅ Investigated", value=invest_text, inline=False)
+        
+        embed.set_footer(text="Use /quest action:investigate rumor_number:N to follow up")
         await interaction.response.send_message(embed=embed)
-    else:
-        await interaction.response.send_message("❌ Failed to accept quest.", ephemeral=True)
+    
+    # === INVESTIGATE ===
+    elif action == "investigate":
+        if rumor_number < 1:
+            await interaction.response.send_message("❌ Specify a rumor number with `rumor_number:`", ephemeral=True)
+            return
+        if not name:
+            await interaction.response.send_message("❌ Specify a quest name with `name:`", ephemeral=True)
+            return
+        
+        rumors = get_uninvestigated_rumors(channel_id)
+        
+        if not rumors:
+            await interaction.response.send_message("❌ No uninvestigated rumors available.", ephemeral=True)
+            return
+        
+        if rumor_number > len(rumors):
+            await interaction.response.send_message(f"❌ Invalid rumor number. You have {len(rumors)} uninvestigated rumors.", ephemeral=True)
+            return
+        
+        rumor = rumors[rumor_number - 1]
+        desc = description if description else f"Investigate: {rumor['text']}"
+        
+        quest = convert_rumor_to_quest(channel_id=channel_id, rumor_id=rumor["id"], quest_name=name, description=desc)
+        
+        if quest:
+            embed = discord.Embed(title="🔍 Rumor Investigated!", description=f"**{quest.name}**\n{quest.description}", color=discord.Color.green())
+            embed.add_field(name="Original Rumor", value=f"*\"{rumor['text']}\"*", inline=False)
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message("❌ Failed to create quest from rumor.", ephemeral=True)
+    
+    # === CHAIN ===
+    elif action == "chain":
+        if not name:
+            await interaction.response.send_message("❌ Specify the parent quest name with `name:`", ephemeral=True)
+            return
+        if not child_quest:
+            await interaction.response.send_message("❌ Specify the child quest with `child_quest:`", ephemeral=True)
+            return
+        
+        parent = get_quest_by_name(channel_id, name)
+        child = get_quest_by_name(channel_id, child_quest)
+        
+        if not parent:
+            await interaction.response.send_message(f"❌ Quest **{name}** not found.", ephemeral=True)
+            return
+        if not child:
+            await interaction.response.send_message(f"❌ Quest **{child_quest}** not found.", ephemeral=True)
+            return
+        
+        if link_quests(channel_id, parent.id, child.id):
+            await interaction.response.send_message(f"🔗 **Quest Chain Created!**\nWhen **{parent.name}** completes, **{child.name}** will unlock automatically.")
+        else:
+            await interaction.response.send_message("❌ Failed to link quests.", ephemeral=True)
 
 
 # =============================================================================
@@ -2464,14 +2326,17 @@ async def environment_cmd(interaction: discord.Interaction):
     damage="Damage dice (e.g., 2d6)",
     damage_type="Type of damage",
     x="X position on map",
-    y="Y position on map"
+    y="Y position on map",
+    roll="Perception or disarm roll result"
 )
 @app_commands.choices(action=[
-    app_commands.Choice(name="Create", value="create"),
-    app_commands.Choice(name="List", value="list"),
-    app_commands.Choice(name="View", value="view"),
-    app_commands.Choice(name="Remove", value="remove"),
-    app_commands.Choice(name="Trigger", value="trigger"),
+    app_commands.Choice(name="📋 List - View all traps", value="list"),
+    app_commands.Choice(name="➕ Create - Create a trap", value="create"),
+    app_commands.Choice(name="👁️ View - View trap details", value="view"),
+    app_commands.Choice(name="🗑️ Remove - Remove a trap", value="remove"),
+    app_commands.Choice(name="💥 Trigger - Trigger a trap", value="trigger"),
+    app_commands.Choice(name="🔍 Detect - Roll to detect trap", value="detect"),
+    app_commands.Choice(name="🔧 Disarm - Roll to disarm trap", value="disarm"),
 ])
 @app_commands.choices(template=[
     app_commands.Choice(name="Pit Trap", value="pit_trap"),
@@ -2495,7 +2360,8 @@ async def trap_cmd(
     damage: str = "2d6",
     damage_type: str = "piercing",
     x: int = -1,
-    y: int = -1
+    y: int = -1,
+    roll: Optional[int] = None
 ):
     """Manage traps in the environment."""
     channel_id = str(interaction.channel.id)
@@ -2599,87 +2465,76 @@ async def trap_cmd(
                 f"Save: {trap.save_type} DC {trap.save_dc}\n"
                 f"Damage: {trap.damage_dice} {trap.damage_type}"
             )
-
-
-@bot.tree.command(name="detecttrap", description="Roll Perception to detect a trap")
-@app_commands.describe(
-    trap_name="Name of the trap (DM use)",
-    roll="Perception roll result"
-)
-async def detect_trap_cmd(
-    interaction: discord.Interaction,
-    trap_name: str,
-    roll: int
-):
-    """Attempt to detect a hidden trap."""
-    channel_id = str(interaction.channel.id)
     
-    result = detect_trap(channel_id, trap_name, roll)
+    elif action == "detect":
+        if not name or roll is None:
+            await interaction.response.send_message(
+                "❌ Required: `name`, `roll`\n"
+                "Example: `/trap action:detect name:\"Pit Trap\" roll:18`",
+                ephemeral=True
+            )
+            return
+        
+        result = detect_trap(channel_id, name, roll)
+        
+        if "error" in result:
+            await interaction.response.send_message(f"❌ {result['error']}", ephemeral=True)
+        elif result.get("already_detected"):
+            await interaction.response.send_message(
+                f"👁️ The trap **{name}** was already detected!",
+                ephemeral=True
+            )
+        elif result["success"]:
+            trap = result["trap"]
+            await interaction.response.send_message(
+                f"👁️ **Trap Detected!**\n"
+                f"You notice a {trap.trap_type} trap: **{trap.name}**\n"
+                f"*{trap.description}*"
+            )
+        else:
+            await interaction.response.send_message(
+                f"You don't notice anything unusual. (Rolled {roll} vs DC {result['dc']})",
+                ephemeral=True
+            )
     
-    if "error" in result:
-        await interaction.response.send_message(f"❌ {result['error']}", ephemeral=True)
-    elif result.get("already_detected"):
-        await interaction.response.send_message(
-            f"👁️ The trap **{trap_name}** was already detected!",
-            ephemeral=True
-        )
-    elif result["success"]:
-        trap = result["trap"]
-        await interaction.response.send_message(
-            f"👁️ **Trap Detected!**\n"
-            f"You notice a {trap.trap_type} trap: **{trap.name}**\n"
-            f"*{trap.description}*"
-        )
-    else:
-        await interaction.response.send_message(
-            f"You don't notice anything unusual. (Rolled {roll} vs DC {result['dc']})",
-            ephemeral=True
-        )
-
-
-@bot.tree.command(name="disarmtrap", description="Attempt to disarm a trap")
-@app_commands.describe(
-    trap_name="Name of the trap",
-    roll="Thieves' Tools or DEX check result"
-)
-async def disarm_trap_cmd(
-    interaction: discord.Interaction,
-    trap_name: str,
-    roll: int
-):
-    """Attempt to disarm a detected trap."""
-    channel_id = str(interaction.channel.id)
-    
-    result = disarm_trap(channel_id, trap_name, roll)
-    
-    if "error" in result:
-        await interaction.response.send_message(f"❌ {result['error']}", ephemeral=True)
-    elif result.get("already_disarmed"):
-        await interaction.response.send_message(
-            f"✅ The trap **{trap_name}** is already disarmed!",
-            ephemeral=True
-        )
-    elif result.get("triggered"):
-        # Critical failure - trap triggers!
-        trap = result["trap"]
-        trigger_result = trigger_trap(channel_id, trap_name, [interaction.user.display_name])
-        await interaction.response.send_message(
-            f"💥 **CRITICAL FAILURE!** The trap triggers!\n"
-            f"*{trap.description}*\n\n"
-            f"Save: {trap.save_type} DC {trap.save_dc}\n"
-            f"Damage: {trap.damage_dice} {trap.damage_type}"
-        )
-    elif result["success"]:
-        await interaction.response.send_message(
-            f"✅ **Trap Disarmed!**\n"
-            f"You carefully disarm the {result['trap'].name}."
-        )
-    else:
-        await interaction.response.send_message(
-            f"❌ Disarm failed! (Rolled {roll} vs DC {result['dc']})\n"
-            f"The trap remains active. Try again carefully...",
-            ephemeral=True
-        )
+    elif action == "disarm":
+        if not name or roll is None:
+            await interaction.response.send_message(
+                "❌ Required: `name`, `roll`\n"
+                "Example: `/trap action:disarm name:\"Pit Trap\" roll:15`",
+                ephemeral=True
+            )
+            return
+        
+        result = disarm_trap(channel_id, name, roll)
+        
+        if "error" in result:
+            await interaction.response.send_message(f"❌ {result['error']}", ephemeral=True)
+        elif result.get("already_disarmed"):
+            await interaction.response.send_message(
+                f"✅ The trap **{name}** is already disarmed!",
+                ephemeral=True
+            )
+        elif result.get("triggered"):
+            trap = result["trap"]
+            trigger_trap(channel_id, name, [interaction.user.display_name])
+            await interaction.response.send_message(
+                f"💥 **CRITICAL FAILURE!** The trap triggers!\n"
+                f"*{trap.description}*\n\n"
+                f"Save: {trap.save_type} DC {trap.save_dc}\n"
+                f"Damage: {trap.damage_dice} {trap.damage_type}"
+            )
+        elif result["success"]:
+            await interaction.response.send_message(
+                f"✅ **Trap Disarmed!**\n"
+                f"You carefully disarm the {result['trap'].name}."
+            )
+        else:
+            await interaction.response.send_message(
+                f"❌ Disarm failed! (Rolled {roll} vs DC {result['dc']})\n"
+                f"The trap remains active. Try again carefully...",
+                ephemeral=True
+            )
 
 
 @bot.tree.command(name="weather", description="Set weather conditions")
@@ -3152,215 +3007,10 @@ async def cover_cmd(
 
 
 # =============================================================================
-# TRAVEL & ENCOUNTER COMMANDS
+# TRAVEL & ENCOUNTER COMMANDS (CONSOLIDATED)
 # =============================================================================
 
-@bot.tree.command(name="travel", description="Start traveling to a destination")
-@app_commands.describe(
-    destination="Where you're traveling to",
-    distance="Distance in miles",
-    terrain="Type of terrain you're traveling through",
-    pace="Travel pace (slow/normal/fast)",
-    origin="Where you're starting from (defaults to current location)"
-)
-@app_commands.choices(terrain=[
-    app_commands.Choice(name="Road", value="road"),
-    app_commands.Choice(name="Forest", value="forest"),
-    app_commands.Choice(name="Plains", value="plains"),
-    app_commands.Choice(name="Mountains", value="mountains"),
-    app_commands.Choice(name="Hills", value="hills"),
-    app_commands.Choice(name="Swamp", value="swamp"),
-    app_commands.Choice(name="Desert", value="desert"),
-    app_commands.Choice(name="Arctic", value="arctic"),
-    app_commands.Choice(name="Coastal", value="coastal"),
-    app_commands.Choice(name="Underground", value="underground"),
-    app_commands.Choice(name="Jungle", value="jungle"),
-])
-@app_commands.choices(pace=[
-    app_commands.Choice(name="Slow (Stealth possible)", value="slow"),
-    app_commands.Choice(name="Normal", value="normal"),
-    app_commands.Choice(name="Fast (-5 Passive Perception)", value="fast"),
-])
-async def travel_cmd(
-    interaction: discord.Interaction,
-    destination: str,
-    distance: float,
-    terrain: str = "road",
-    pace: str = "normal",
-    origin: str = ""
-):
-    """Start traveling between locations."""
-    channel_id = str(interaction.channel.id)
-    
-    # Get origin from campaign state if not specified
-    if not origin:
-        state = load_state(channel_id)
-        origin = state.get("location", "Current Location")
-    
-    # Calculate travel time
-    travel_info = calculate_travel_time(distance, terrain, pace)
-    
-    # Start travel
-    travel_state = start_travel(
-        channel_id=channel_id,
-        origin=origin,
-        destination=destination,
-        distance_miles=distance,
-        terrain=terrain,
-        pace=pace
-    )
-    
-    embed = discord.Embed(
-        title="🗺️ Journey Begun",
-        description=f"Traveling from **{origin}** to **{destination}**",
-        color=discord.Color.blue()
-    )
-    embed.add_field(name="Distance", value=f"{distance} miles", inline=True)
-    embed.add_field(name="Terrain", value=terrain.title(), inline=True)
-    embed.add_field(name="Pace", value=pace.title(), inline=True)
-    embed.add_field(name="Estimated Time", value=f"{travel_info['days_required']} days", inline=True)
-    embed.add_field(name="Miles/Day", value=f"{travel_info['miles_per_day']:.1f}", inline=True)
-    
-    if travel_info['stealth_possible']:
-        embed.add_field(name="Stealth", value="✅ Possible", inline=True)
-    if travel_info['perception_mod'] != 0:
-        embed.add_field(name="Perception", value=f"{travel_info['perception_mod']:+d}", inline=True)
-    
-    embed.set_footer(text="Use /traveladvance to move forward, or /travelstatus to check progress")
-    
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="travelstatus", description="Check current travel progress")
-async def travel_status_cmd(interaction: discord.Interaction):
-    """Show current travel status."""
-    channel_id = str(interaction.channel.id)
-    
-    status = get_travel_status(channel_id)
-    if not status:
-        await interaction.response.send_message(
-            "🏠 Not currently traveling. Use `/travel` to begin a journey.",
-            ephemeral=True
-        )
-        return
-    
-    # Build progress bar
-    percent = status['progress_percent']
-    filled = int(percent / 10)
-    bar = "█" * filled + "░" * (10 - filled)
-    
-    embed = discord.Embed(
-        title="🗺️ Travel Status",
-        description=f"**{status['origin']}** → **{status['destination']}**",
-        color=discord.Color.blue()
-    )
-    embed.add_field(name="Terrain", value=status['terrain'].title(), inline=True)
-    embed.add_field(name="Pace", value=status['pace'].title(), inline=True)
-    embed.add_field(name="Day", value=str(status['days_traveled'] + 1), inline=True)
-    embed.add_field(
-        name="Progress",
-        value=f"[{bar}] {percent:.0f}%\n{status['traveled_miles']:.1f} / {status['total_miles']:.1f} miles",
-        inline=False
-    )
-    embed.add_field(name="Hours Today", value=f"{status['hours_today']:.1f}/8", inline=True)
-    embed.add_field(name="Remaining", value=f"{status['remaining_miles']:.1f} miles", inline=True)
-    
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="traveladvance", description="Advance travel by hours")
-@app_commands.describe(hours="Number of hours to travel (1-8)")
-async def travel_advance_cmd(
-    interaction: discord.Interaction,
-    hours: int = 1
-):
-    """Advance travel and check for encounters."""
-    channel_id = str(interaction.channel.id)
-    
-    status = get_travel_status(channel_id)
-    if not status:
-        await interaction.response.send_message(
-            "🏠 Not currently traveling. Use `/travel` to begin a journey.",
-            ephemeral=True
-        )
-        return
-    
-    hours = max(1, min(8, hours))  # Clamp to 1-8 hours
-    
-    result = advance_travel(channel_id, hours)
-    
-    if result.get('error'):
-        await interaction.response.send_message(f"❌ {result['error']}", ephemeral=True)
-        return
-    
-    # Build response
-    lines = [
-        f"⏰ **{hours} hour(s) pass...**",
-        f"Traveled: {result['miles_traveled']:.1f} miles",
-    ]
-    
-    # Check if arrived
-    if result['arrived']:
-        lines.append(f"\n🎉 **Arrived at {result['destination']}!**")
-        
-        # Update campaign location
-        state = load_state(channel_id)
-        state["location"] = result['destination']
-        save_state(channel_id, state)
-    else:
-        lines.append(f"Progress: {result['progress_percent']:.0f}% ({result['remaining']:.1f} miles remaining)")
-    
-    await interaction.response.send_message("\n".join(lines))
-    
-    # Handle encounter if one occurred
-    if result.get('encounter'):
-        enc = result['encounter']
-        
-        if enc.get('needs_generation'):
-            # Need party info to generate combat encounter
-            await interaction.followup.send(
-                "⚔️ **Random Encounter!** Use `/randomencounter` to generate the combat encounter."
-            )
-        elif enc.get('event_type') == 'combat':
-            # Pre-generated combat encounter
-            await interaction.followup.send(format_encounter_summary(Encounter.from_dict(enc)))
-        else:
-            # Non-combat event
-            await interaction.followup.send(format_random_event(enc))
-
-
-@bot.tree.command(name="travelcancel", description="Cancel current travel")
-async def travel_cancel_cmd(interaction: discord.Interaction):
-    """Cancel the current journey."""
-    channel_id = str(interaction.channel.id)
-    
-    status = get_travel_status(channel_id)
-    if not status:
-        await interaction.response.send_message(
-            "🏠 Not currently traveling.",
-            ephemeral=True
-        )
-        return
-    
-    clear_travel_state(channel_id)
-    await interaction.response.send_message(
-        f"🛑 Journey to **{status['destination']}** cancelled.\n"
-        f"Party remains in the wilderness ({status['traveled_miles']:.1f} miles from {status['origin']})."
-    )
-
-
-@bot.tree.command(name="randomencounter", description="Generate a random encounter")
-@app_commands.describe(
-    difficulty="Encounter difficulty",
-    terrain="Terrain type for the encounter"
-)
-@app_commands.choices(difficulty=[
-    app_commands.Choice(name="Easy", value="easy"),
-    app_commands.Choice(name="Medium", value="medium"),
-    app_commands.Choice(name="Hard", value="hard"),
-    app_commands.Choice(name="Deadly", value="deadly"),
-])
-@app_commands.choices(terrain=[
+TERRAIN_CHOICES = [
     app_commands.Choice(name="Road", value="road"),
     app_commands.Choice(name="Forest", value="forest"),
     app_commands.Choice(name="Plains", value="plains"),
@@ -3373,76 +3023,198 @@ async def travel_cancel_cmd(interaction: discord.Interaction):
     app_commands.Choice(name="Underground", value="underground"),
     app_commands.Choice(name="Jungle", value="jungle"),
     app_commands.Choice(name="Ruins", value="ruins"),
+]
+
+@bot.tree.command(name="travel", description="Manage travel - start journeys, check status, advance time")
+@app_commands.describe(
+    action="Action to perform",
+    destination="Where you're traveling to (for start)",
+    distance="Distance in miles (for start)",
+    terrain="Terrain type",
+    pace="Travel pace",
+    hours="Hours to advance (for advance)",
+    origin="Starting location (for start)"
+)
+@app_commands.choices(action=[
+    app_commands.Choice(name="start", value="start"),
+    app_commands.Choice(name="status", value="status"),
+    app_commands.Choice(name="advance", value="advance"),
+    app_commands.Choice(name="cancel", value="cancel"),
 ])
-async def random_encounter_cmd(
+@app_commands.choices(terrain=TERRAIN_CHOICES)
+@app_commands.choices(pace=[
+    app_commands.Choice(name="Slow (Stealth possible)", value="slow"),
+    app_commands.Choice(name="Normal", value="normal"),
+    app_commands.Choice(name="Fast (-5 Passive Perception)", value="fast"),
+])
+async def travel_cmd(
     interaction: discord.Interaction,
-    difficulty: str = "medium",
-    terrain: str = "plains"
+    action: str = "status",
+    destination: str = "",
+    distance: float = 0,
+    terrain: str = "road",
+    pace: str = "normal",
+    hours: int = 1,
+    origin: str = ""
 ):
-    """Generate a random combat encounter for the party."""
+    """Consolidated travel management command."""
     channel_id = str(interaction.channel.id)
     
-    # Get party levels from registered characters
-    state = load_state(channel_id)
-    party_levels = []
+    # === START ===
+    if action == "start":
+        if not destination:
+            await interaction.response.send_message("❌ Specify a destination with `destination:`", ephemeral=True)
+            return
+        if distance <= 0:
+            await interaction.response.send_message("❌ Specify a distance with `distance:`", ephemeral=True)
+            return
+        
+        if not origin:
+            state = load_state(channel_id)
+            origin = state.get("location", "Current Location")
+        
+        travel_info = calculate_travel_time(distance, terrain, pace)
+        travel_state = start_travel(
+            channel_id=channel_id,
+            origin=origin,
+            destination=destination,
+            distance_miles=distance,
+            terrain=terrain,
+            pace=pace
+        )
+        
+        embed = discord.Embed(
+            title="🗺️ Journey Begun",
+            description=f"Traveling from **{origin}** to **{destination}**",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Distance", value=f"{distance} miles", inline=True)
+        embed.add_field(name="Terrain", value=terrain.title(), inline=True)
+        embed.add_field(name="Pace", value=pace.title(), inline=True)
+        embed.add_field(name="Estimated Time", value=f"{travel_info['days_required']} days", inline=True)
+        embed.add_field(name="Miles/Day", value=f"{travel_info['miles_per_day']:.1f}", inline=True)
+        
+        if travel_info['stealth_possible']:
+            embed.add_field(name="Stealth", value="✅ Possible", inline=True)
+        if travel_info['perception_mod'] != 0:
+            embed.add_field(name="Perception", value=f"{travel_info['perception_mod']:+d}", inline=True)
+        
+        embed.set_footer(text="Use /travel action:advance to move forward")
+        await interaction.response.send_message(embed=embed)
     
-    for player_data in state.get("players", []):
-        user_id = player_data.get("id")
-        if user_id:
-            char = load_character(str(user_id))
-            if char:
-                party_levels.append(char.get("level", 1))
+    # === STATUS ===
+    elif action == "status":
+        status = get_travel_status(channel_id)
+        if not status:
+            await interaction.response.send_message(
+                "🏠 Not currently traveling. Use `/travel action:start destination:... distance:...` to begin a journey.",
+                ephemeral=True
+            )
+            return
+        
+        percent = status['progress_percent']
+        filled = int(percent / 10)
+        bar = "█" * filled + "░" * (10 - filled)
+        
+        embed = discord.Embed(
+            title="🗺️ Travel Status",
+            description=f"**{status['origin']}** → **{status['destination']}**",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Terrain", value=status['terrain'].title(), inline=True)
+        embed.add_field(name="Pace", value=status['pace'].title(), inline=True)
+        embed.add_field(name="Day", value=str(status['days_traveled'] + 1), inline=True)
+        embed.add_field(
+            name="Progress",
+            value=f"[{bar}] {percent:.0f}%\n{status['traveled_miles']:.1f} / {status['total_miles']:.1f} miles",
+            inline=False
+        )
+        embed.add_field(name="Hours Today", value=f"{status['hours_today']:.1f}/8", inline=True)
+        embed.add_field(name="Remaining", value=f"{status['remaining_miles']:.1f} miles", inline=True)
+        
+        await interaction.response.send_message(embed=embed)
     
-    if not party_levels:
-        # Default to level 1 party of 4
-        party_levels = [1, 1, 1, 1]
+    # === ADVANCE ===
+    elif action == "advance":
+        status = get_travel_status(channel_id)
+        if not status:
+            await interaction.response.send_message(
+                "🏠 Not currently traveling. Use `/travel action:start` to begin a journey.",
+                ephemeral=True
+            )
+            return
+        
+        hours = max(1, min(8, hours))
+        result = advance_travel(channel_id, hours)
+        
+        if result.get('error'):
+            await interaction.response.send_message(f"❌ {result['error']}", ephemeral=True)
+            return
+        
+        lines = [
+            f"⏰ **{hours} hour(s) pass...**",
+            f"Traveled: {result['miles_traveled']:.1f} miles",
+        ]
+        
+        if result['arrived']:
+            lines.append(f"\n🎉 **Arrived at {result['destination']}!**")
+            state = load_state(channel_id)
+            state["location"] = result['destination']
+            save_state(channel_id, state)
+        else:
+            lines.append(f"Progress: {result['progress_percent']:.0f}% ({result['remaining']:.1f} miles remaining)")
+        
+        await interaction.response.send_message("\n".join(lines))
+        
+        if result.get('encounter'):
+            enc = result['encounter']
+            if enc.get('needs_generation'):
+                await interaction.followup.send(
+                    "⚔️ **Random Encounter!** Use `/encounter action:combat` to generate the combat encounter."
+                )
+            elif enc.get('event_type') == 'combat':
+                await interaction.followup.send(format_encounter_summary(Encounter.from_dict(enc)))
+            else:
+                await interaction.followup.send(format_random_event(enc))
     
-    # Use terrain from travel state if available
-    travel_status = get_travel_status(channel_id)
-    if travel_status and terrain == "plains":
-        terrain = travel_status.get('terrain', terrain)
-    
-    # Generate encounter
-    encounter = generate_combat_encounter(party_levels, terrain, difficulty)
-    
-    embed = discord.Embed(
-        title=f"⚔️ {encounter.name}",
-        description=encounter.description,
-        color=discord.Color.red()
-    )
-    
-    # Difficulty badge
-    diff_colors = {"trivial": "🟢", "easy": "🟡", "medium": "🟠", "hard": "🔴", "deadly": "💀"}
-    embed.add_field(
-        name="Difficulty",
-        value=f"{diff_colors.get(encounter.difficulty, '⚪')} {encounter.difficulty.title()}",
-        inline=True
-    )
-    embed.add_field(name="Terrain", value=terrain.title(), inline=True)
-    embed.add_field(name="XP Reward", value=str(encounter.xp_reward), inline=True)
-    
-    # List enemies
-    enemy_text = ""
-    for monster in encounter.monsters:
-        enemy_text += f"• **{monster['name']}** (HP: {monster['hp']}, AC: {monster['ac']})\n"
-    
-    if enemy_text:
-        embed.add_field(name="Enemies", value=enemy_text, inline=False)
-    
-    embed.set_footer(text=f"Use /combat to start combat with these enemies")
-    
-    # Store encounter for /combat command
-    state["pending_encounter"] = encounter.to_dict()
-    save_state(channel_id, state)
-    
-    await interaction.response.send_message(embed=embed)
+    # === CANCEL ===
+    elif action == "cancel":
+        status = get_travel_status(channel_id)
+        if not status:
+            await interaction.response.send_message("🏠 Not currently traveling.", ephemeral=True)
+            return
+        
+        clear_travel_state(channel_id)
+        await interaction.response.send_message(
+            f"🛑 Journey to **{status['destination']}** cancelled.\n"
+            f"Party remains in the wilderness ({status['traveled_miles']:.1f} miles from {status['origin']})."
+        )
 
 
-@bot.tree.command(name="encounter", description="Generate a random non-combat encounter")
+@bot.tree.command(name="encounter", description="Generate or check for encounters")
 @app_commands.describe(
-    event_type="Type of event to generate",
-    terrain="Terrain type for the encounter"
+    action="Type of encounter action",
+    difficulty="Encounter difficulty (for combat)",
+    terrain="Terrain type",
+    event_type="Type of non-combat event",
+    hours="Hours to check for encounters",
+    is_night="Is it nighttime?",
+    stealthy="Is the party being stealthy?"
 )
+@app_commands.choices(action=[
+    app_commands.Choice(name="combat", value="combat"),
+    app_commands.Choice(name="social", value="social"),
+    app_commands.Choice(name="discovery", value="discovery"),
+    app_commands.Choice(name="random", value="random"),
+    app_commands.Choice(name="check", value="check"),
+])
+@app_commands.choices(difficulty=[
+    app_commands.Choice(name="Easy", value="easy"),
+    app_commands.Choice(name="Medium", value="medium"),
+    app_commands.Choice(name="Hard", value="hard"),
+    app_commands.Choice(name="Deadly", value="deadly"),
+])
+@app_commands.choices(terrain=TERRAIN_CHOICES)
 @app_commands.choices(event_type=[
     app_commands.Choice(name="Social (NPCs)", value="social"),
     app_commands.Choice(name="Discovery", value="discovery"),
@@ -3450,37 +3222,72 @@ async def random_encounter_cmd(
     app_commands.Choice(name="Rest Site", value="rest_site"),
     app_commands.Choice(name="Random", value="random"),
 ])
-@app_commands.choices(terrain=[
-    app_commands.Choice(name="Road", value="road"),
-    app_commands.Choice(name="Forest", value="forest"),
-    app_commands.Choice(name="Plains", value="plains"),
-    app_commands.Choice(name="Mountains", value="mountains"),
-    app_commands.Choice(name="Hills", value="hills"),
-    app_commands.Choice(name="Swamp", value="swamp"),
-    app_commands.Choice(name="Desert", value="desert"),
-    app_commands.Choice(name="Coastal", value="coastal"),
-    app_commands.Choice(name="Underground", value="underground"),
-])
-async def non_combat_encounter_cmd(
+async def encounter_cmd(
     interaction: discord.Interaction,
+    action: str = "random",
+    difficulty: str = "medium",
+    terrain: str = "plains",
     event_type: str = "random",
-    terrain: str = "road"
+    hours: int = 1,
+    is_night: bool = False,
+    stealthy: bool = False
 ):
-    """Generate a random non-combat encounter."""
+    """Consolidated encounter command."""
     channel_id = str(interaction.channel.id)
     
-    # Use terrain from travel state if available
+    # Get terrain from travel state if available
     travel_status = get_travel_status(channel_id)
-    if travel_status and terrain == "road":
+    if travel_status and terrain == "plains":
         terrain = travel_status.get('terrain', terrain)
     
-    if event_type == "random":
-        event_type = determine_encounter_type()
-        # If it rolled combat, re-roll for non-combat
-        while event_type == "combat":
-            event_type = determine_encounter_type()
+    # === COMBAT ===
+    if action == "combat":
+        state = load_state(channel_id)
+        party_levels = []
+        
+        for player_data in state.get("players", []):
+            user_id = player_data.get("id")
+            if user_id:
+                char = load_character(str(user_id))
+                if char:
+                    party_levels.append(char.get("level", 1))
+        
+        if not party_levels:
+            party_levels = [1, 1, 1, 1]
+        
+        encounter = generate_combat_encounter(party_levels, terrain, difficulty)
+        
+        embed = discord.Embed(
+            title=f"⚔️ {encounter.name}",
+            description=encounter.description,
+            color=discord.Color.red()
+        )
+        
+        diff_colors = {"trivial": "🟢", "easy": "🟡", "medium": "🟠", "hard": "🔴", "deadly": "💀"}
+        embed.add_field(
+            name="Difficulty",
+            value=f"{diff_colors.get(encounter.difficulty, '⚪')} {encounter.difficulty.title()}",
+            inline=True
+        )
+        embed.add_field(name="Terrain", value=terrain.title(), inline=True)
+        embed.add_field(name="XP Reward", value=str(encounter.xp_reward), inline=True)
+        
+        enemy_text = ""
+        for monster in encounter.monsters:
+            enemy_text += f"• **{monster['name']}** (HP: {monster['hp']}, AC: {monster['ac']})\n"
+        
+        if enemy_text:
+            embed.add_field(name="Enemies", value=enemy_text, inline=False)
+        
+        embed.set_footer(text="Use /combat to start combat with these enemies")
+        
+        state["pending_encounter"] = encounter.to_dict()
+        save_state(channel_id, state)
+        
+        await interaction.response.send_message(embed=embed)
     
-    if event_type == "social":
+    # === SOCIAL ===
+    elif action == "social":
         encounter = generate_social_encounter(terrain)
         embed = discord.Embed(
             title=f"👥 {encounter.name}",
@@ -3490,8 +3297,10 @@ async def non_combat_encounter_cmd(
         embed.add_field(name="Type", value="Social Encounter", inline=True)
         embed.add_field(name="Terrain", value=terrain.title(), inline=True)
         embed.set_footer(text="Roleplay this encounter or use /do to interact")
-        
-    elif event_type == "discovery":
+        await interaction.response.send_message(embed=embed)
+    
+    # === DISCOVERY ===
+    elif action == "discovery":
         encounter = generate_discovery_encounter(terrain)
         embed = discord.Embed(
             title=f"🔍 {encounter.name}",
@@ -3501,217 +3310,72 @@ async def non_combat_encounter_cmd(
         embed.add_field(name="Type", value="Discovery", inline=True)
         embed.add_field(name="Terrain", value=terrain.title(), inline=True)
         embed.set_footer(text="Investigate with /do or continue on your way")
+        await interaction.response.send_message(embed=embed)
+    
+    # === RANDOM ===
+    elif action == "random":
+        rand_type = event_type
+        if rand_type == "random":
+            rand_type = determine_encounter_type()
+            while rand_type == "combat":
+                rand_type = determine_encounter_type()
         
-    else:
-        # Weather, rest_site, or other
-        event = generate_random_event(event_type)
-        emoji_map = {"weather": "🌦️", "discovery": "🔍", "rest_site": "🏕️", "social": "👥", "hazard": "⚠️"}
-        embed = discord.Embed(
-            title=f"{emoji_map.get(event_type, '❓')} {event['name']}",
-            description=event['description'],
-            color=discord.Color.green()
-        )
-        embed.add_field(name="Type", value=event_type.replace("_", " ").title(), inline=True)
-        if event.get('effect'):
-            embed.add_field(name="Effect", value=event['effect'], inline=False)
-    
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="encountercheck", description="Roll for a random encounter")
-@app_commands.describe(
-    hours="Hours of travel/activity to check",
-    terrain="Terrain type",
-    is_night="Is it nighttime?",
-    stealthy="Is the party being stealthy?"
-)
-@app_commands.choices(terrain=[
-    app_commands.Choice(name="Road", value="road"),
-    app_commands.Choice(name="Forest", value="forest"),
-    app_commands.Choice(name="Plains", value="plains"),
-    app_commands.Choice(name="Mountains", value="mountains"),
-    app_commands.Choice(name="Swamp", value="swamp"),
-    app_commands.Choice(name="Underground", value="underground"),
-])
-async def encounter_check_cmd(
-    interaction: discord.Interaction,
-    hours: int = 1,
-    terrain: str = "road",
-    is_night: bool = False,
-    stealthy: bool = False
-):
-    """Roll to see if a random encounter occurs."""
-    channel_id = str(interaction.channel.id)
-    
-    # Use terrain from travel state if available
-    travel_status = get_travel_status(channel_id)
-    if travel_status:
-        terrain = travel_status.get('terrain', terrain)
-    
-    base_chance = TERRAIN_MODIFIERS.get(terrain, {}).get("encounter_chance", 0.15)
-    
-    # Roll
-    encounter_occurred = roll_for_encounter(terrain, hours, is_night, stealthy)
-    
-    if encounter_occurred:
-        event_type = determine_encounter_type()
+        if rand_type == "social":
+            encounter = generate_social_encounter(terrain)
+            embed = discord.Embed(
+                title=f"👥 {encounter.name}",
+                description=encounter.description,
+                color=discord.Color.blue()
+            )
+            embed.add_field(name="Type", value="Social Encounter", inline=True)
+            embed.add_field(name="Terrain", value=terrain.title(), inline=True)
+        elif rand_type == "discovery":
+            encounter = generate_discovery_encounter(terrain)
+            embed = discord.Embed(
+                title=f"🔍 {encounter.name}",
+                description=encounter.description,
+                color=discord.Color.gold()
+            )
+            embed.add_field(name="Type", value="Discovery", inline=True)
+            embed.add_field(name="Terrain", value=terrain.title(), inline=True)
+        else:
+            event = generate_random_event(rand_type)
+            emoji_map = {"weather": "🌦️", "discovery": "🔍", "rest_site": "🏕️", "social": "👥", "hazard": "⚠️"}
+            embed = discord.Embed(
+                title=f"{emoji_map.get(rand_type, '❓')} {event['name']}",
+                description=event['description'],
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Type", value=rand_type.replace("_", " ").title(), inline=True)
+            if event.get('effect'):
+                embed.add_field(name="Effect", value=event['effect'], inline=False)
         
-        await interaction.response.send_message(
-            f"🎲 **Encounter Check:** Something happens!\n"
-            f"Event Type: **{event_type.title()}**\n"
-            f"Use `/randomencounter` for combat or `/encounter` for non-combat."
-        )
-    else:
-        await interaction.response.send_message(
-            f"🎲 **Encounter Check:** The journey continues uneventfully.\n"
-            f"(Base chance: {base_chance*100:.0f}%, checked for {hours} hour(s))"
-        )
-
-
-# =============================================================================
-# WORLD MAP COMMANDS (Phase 14)
-# =============================================================================
-
-@bot.tree.command(name="worldmap", description="View the world map and known locations")
-async def worldmap_cmd(interaction: discord.Interaction):
-    """View all known locations and travel connections."""
-    channel_id = str(interaction.channel.id)
+        await interaction.response.send_message(embed=embed)
     
-    world_state = load_world_state(channel_id)
-    current = world_state.current_location
-    
-    embed = discord.Embed(
-        title="🗺️ World Map",
-        description=f"Current Location: **{current}**",
-        color=discord.Color.blue()
-    )
-    
-    if not world_state.locations:
-        embed.add_field(
-            name="No Locations Discovered",
-            value="Explore the world to discover new locations!\nLocations are discovered through narration and NPC conversations.",
-            inline=False
-        )
-    else:
-        # Group locations by status
-        explored = [l for l in world_state.locations.values() if l.status == "explored"]
-        visited = [l for l in world_state.locations.values() if l.status == "visited"]
-        known = [l for l in world_state.locations.values() if l.status == "known"]
-        heard_of = [l for l in world_state.locations.values() if l.status == "heard_of"]
+    # === CHECK ===
+    elif action == "check":
+        base_chance = TERRAIN_MODIFIERS.get(terrain, {}).get("encounter_chance", 0.15)
+        encounter_occurred = roll_for_encounter(terrain, hours, is_night, stealthy)
         
-        if explored:
-            loc_text = "\n".join([f"🗺️ {l.name} ({l.terrain})" for l in explored[:10]])
-            embed.add_field(name="Fully Explored", value=loc_text, inline=False)
-        
-        if visited:
-            loc_text = "\n".join([f"✅ {'⭐ ' if l.is_poi else ''}{l.name} ({l.terrain})" for l in visited[:10]])
-            embed.add_field(name="Visited Locations", value=loc_text, inline=False)
-        
-        if known:
-            loc_text = "\n".join([f"📍 {'⭐ ' if l.is_poi else ''}{l.name}" for l in known[:10]])
-            embed.add_field(name="Known Locations", value=loc_text, inline=False)
-        
-        if heard_of:
-            loc_text = "\n".join([f"👂 {l.name}" for l in heard_of[:10]])
-            embed.add_field(name="Rumors & Hearsay", value=loc_text, inline=False)
-        
-        # Show current location's connections
-        current_loc = world_state.locations.get(current)
-        if current_loc and current_loc.connections:
-            conn_text = "\n".join([
-                f"→ {dest}: {dist:.0f} miles"
-                for dest, dist in sorted(current_loc.connections.items(), key=lambda x: x[1])
-            ][:10])
-            embed.add_field(name="Nearby Destinations", value=conn_text, inline=False)
-    
-    embed.add_field(
-        name="Total Miles Traveled",
-        value=f"{world_state.total_miles_traveled:.0f} miles",
-        inline=True
-    )
-    
-    embed.set_footer(text="Use /fasttravel to travel to visited locations, or /addlocation to add new ones")
-    
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="fasttravel", description="Fast travel to a visited location")
-@app_commands.describe(destination="The location to travel to")
-async def fasttravel_cmd(
-    interaction: discord.Interaction,
-    destination: str
-):
-    """Fast travel to a previously visited location."""
-    channel_id = str(interaction.channel.id)
-    
-    # Check if fast travel is possible
-    if not can_fast_travel(channel_id, destination):
-        # Show available options
-        options = get_fast_travel_options(channel_id)
-        if options:
-            opt_text = "\n".join([f"• {opt['name']}" for opt in options[:10]])
+        if encounter_occurred:
+            evt_type = determine_encounter_type()
             await interaction.response.send_message(
-                f"❌ Cannot fast travel to **{destination}**.\n"
-                f"You can only fast travel to visited locations.\n\n"
-                f"**Available Destinations:**\n{opt_text}",
-                ephemeral=True
+                f"🎲 **Encounter Check:** Something happens!\n"
+                f"Event Type: **{evt_type.title()}**\n"
+                f"Use `/encounter action:combat` for combat or `/encounter action:random` for non-combat."
             )
         else:
             await interaction.response.send_message(
-                f"❌ No fast travel destinations available.\n"
-                f"Explore the world to discover and visit new locations!",
-                ephemeral=True
+                f"🎲 **Encounter Check:** The journey continues uneventfully.\n"
+                f"(Base chance: {base_chance*100:.0f}%, checked for {hours} hour(s))"
             )
-        return
-    
-    # Execute fast travel
-    result = fast_travel(channel_id, destination)
-    
-    if result.get("error"):
-        await interaction.response.send_message(f"❌ {result['error']}", ephemeral=True)
-        return
-    
-    # Update campaign location
-    state = load_state(channel_id)
-    state["location"] = destination
-    save_state(channel_id, state)
-    
-    embed = discord.Embed(
-        title="⚡ Fast Travel Complete",
-        description=f"Traveled from **{result['previous_location']}** to **{result['new_location']}**",
-        color=discord.Color.green()
-    )
-    embed.add_field(name="Distance", value=f"{result['distance']:.1f} miles", inline=True)
-    embed.add_field(name="Travel Time", value=f"{result['travel_time_days']} day(s)", inline=True)
-    embed.set_footer(text="The journey was uneventful along familiar roads")
-    
-    await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="addlocation", description="Manually add a location to the world map")
-@app_commands.describe(
-    name="Location name",
-    terrain="Terrain type",
-    location_type="Type of location",
-    description="Brief description",
-    distance_from_current="Distance from current location (miles)",
-    is_poi="Is this a point of interest?"
-)
-@app_commands.choices(terrain=[
-    app_commands.Choice(name="Road", value="road"),
-    app_commands.Choice(name="Forest", value="forest"),
-    app_commands.Choice(name="Plains", value="plains"),
-    app_commands.Choice(name="Mountains", value="mountains"),
-    app_commands.Choice(name="Hills", value="hills"),
-    app_commands.Choice(name="Swamp", value="swamp"),
-    app_commands.Choice(name="Desert", value="desert"),
-    app_commands.Choice(name="Arctic", value="arctic"),
-    app_commands.Choice(name="Coastal", value="coastal"),
-    app_commands.Choice(name="Urban", value="urban"),
-    app_commands.Choice(name="Underground", value="underground"),
-    app_commands.Choice(name="Jungle", value="jungle"),
-])
-@app_commands.choices(location_type=[
+# =============================================================================
+# WORLD MAP COMMANDS (CONSOLIDATED - Phase 14)
+# =============================================================================
+
+LOCATION_TYPE_CHOICES = [
     app_commands.Choice(name="City", value="city"),
     app_commands.Choice(name="Town", value="town"),
     app_commands.Choice(name="Village", value="village"),
@@ -3725,202 +3389,326 @@ async def fasttravel_cmd(
     app_commands.Choice(name="Camp", value="camp"),
     app_commands.Choice(name="Landmark", value="landmark"),
     app_commands.Choice(name="Unknown", value="unknown"),
+]
+
+@bot.tree.command(name="worldmap", description="Manage world map - view locations, fast travel, add/set locations")
+@app_commands.describe(
+    action="Action to perform",
+    location="Location name (for view, fasttravel, set, add)",
+    terrain="Terrain type (for add)",
+    location_type="Type of location (for add)",
+    description="Brief description (for add)",
+    distance="Distance from current location in miles (for add)",
+    is_poi="Is this a point of interest? (for add)"
+)
+@app_commands.choices(action=[
+    app_commands.Choice(name="view", value="view"),
+    app_commands.Choice(name="list", value="list"),
+    app_commands.Choice(name="fasttravel", value="fasttravel"),
+    app_commands.Choice(name="set", value="set"),
+    app_commands.Choice(name="add", value="add"),
+    app_commands.Choice(name="info", value="info"),
 ])
-async def addlocation_cmd(
+@app_commands.choices(terrain=TERRAIN_CHOICES)
+@app_commands.choices(location_type=LOCATION_TYPE_CHOICES)
+async def worldmap_cmd(
     interaction: discord.Interaction,
-    name: str,
+    action: str = "list",
+    location: str = "",
     terrain: str = "wilderness",
     location_type: str = "unknown",
     description: str = "",
-    distance_from_current: float = 0,
+    distance: float = 0,
     is_poi: bool = False
 ):
-    """Add a new location to the world map."""
+    """Consolidated world map command."""
     channel_id = str(interaction.channel.id)
     
-    # Add the location
-    location = add_location(
-        channel_id=channel_id,
-        name=name,
-        terrain=terrain,
-        location_type=location_type,
-        description=description,
-        is_poi=is_poi,
-        status="known"
-    )
-    
-    # Connect to current location if distance provided
-    if distance_from_current > 0:
-        current = get_current_location(channel_id)
-        if current:
-            connect_locations(channel_id, current, name, distance_from_current)
-    
-    embed = discord.Embed(
-        title="📍 Location Added",
-        description=f"**{name}** has been added to the world map",
-        color=discord.Color.green()
-    )
-    embed.add_field(name="Type", value=location_type.title(), inline=True)
-    embed.add_field(name="Terrain", value=terrain.title(), inline=True)
-    if is_poi:
-        embed.add_field(name="Point of Interest", value="⭐ Yes", inline=True)
-    if description:
-        embed.add_field(name="Description", value=description, inline=False)
-    if distance_from_current > 0:
+    # === LIST (default view) ===
+    if action == "list" or action == "view":
+        world_state = load_world_state(channel_id)
+        current = world_state.current_location
+        
+        embed = discord.Embed(
+            title="🗺️ World Map",
+            description=f"Current Location: **{current}**",
+            color=discord.Color.blue()
+        )
+        
+        if not world_state.locations:
+            embed.add_field(
+                name="No Locations Discovered",
+                value="Explore the world to discover new locations!\nLocations are discovered through narration and NPC conversations.",
+                inline=False
+            )
+        else:
+            explored = [l for l in world_state.locations.values() if l.status == "explored"]
+            visited = [l for l in world_state.locations.values() if l.status == "visited"]
+            known = [l for l in world_state.locations.values() if l.status == "known"]
+            heard_of = [l for l in world_state.locations.values() if l.status == "heard_of"]
+            
+            if explored:
+                loc_text = "\n".join([f"🗺️ {l.name} ({l.terrain})" for l in explored[:10]])
+                embed.add_field(name="Fully Explored", value=loc_text, inline=False)
+            
+            if visited:
+                loc_text = "\n".join([f"✅ {'⭐ ' if l.is_poi else ''}{l.name} ({l.terrain})" for l in visited[:10]])
+                embed.add_field(name="Visited Locations", value=loc_text, inline=False)
+            
+            if known:
+                loc_text = "\n".join([f"📍 {'⭐ ' if l.is_poi else ''}{l.name}" for l in known[:10]])
+                embed.add_field(name="Known Locations", value=loc_text, inline=False)
+            
+            if heard_of:
+                loc_text = "\n".join([f"👂 {l.name}" for l in heard_of[:10]])
+                embed.add_field(name="Rumors & Hearsay", value=loc_text, inline=False)
+            
+            current_loc = world_state.locations.get(current)
+            if current_loc and current_loc.connections:
+                conn_text = "\n".join([
+                    f"→ {dest}: {dist:.0f} miles"
+                    for dest, dist in sorted(current_loc.connections.items(), key=lambda x: x[1])
+                ][:10])
+                embed.add_field(name="Nearby Destinations", value=conn_text, inline=False)
+        
         embed.add_field(
-            name="Distance",
-            value=f"{distance_from_current:.0f} miles from current location",
-            inline=False
+            name="Total Miles Traveled",
+            value=f"{world_state.total_miles_traveled:.0f} miles",
+            inline=True
         )
+        
+        embed.set_footer(text="Use /worldmap action:fasttravel location:... to travel")
+        await interaction.response.send_message(embed=embed)
     
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="setlocation", description="Set the party's current location")
-@app_commands.describe(location="The location name to set as current")
-async def setlocation_cmd(
-    interaction: discord.Interaction,
-    location: str
-):
-    """Set the party's current location on the world map."""
-    channel_id = str(interaction.channel.id)
+    # === FASTTRAVEL ===
+    elif action == "fasttravel":
+        if not location:
+            options = get_fast_travel_options(channel_id)
+            if options:
+                opt_text = "\n".join([f"• {opt['name']}" for opt in options[:15]])
+                await interaction.response.send_message(
+                    f"**Available Fast Travel Destinations:**\n{opt_text}\n\n"
+                    f"Use `/worldmap action:fasttravel location:...` to travel.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "❌ No fast travel destinations available.\nExplore the world to discover and visit new locations!",
+                    ephemeral=True
+                )
+            return
+        
+        if not can_fast_travel(channel_id, location):
+            options = get_fast_travel_options(channel_id)
+            if options:
+                opt_text = "\n".join([f"• {opt['name']}" for opt in options[:10]])
+                await interaction.response.send_message(
+                    f"❌ Cannot fast travel to **{location}**.\n"
+                    f"You can only fast travel to visited locations.\n\n"
+                    f"**Available Destinations:**\n{opt_text}",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    f"❌ No fast travel destinations available.",
+                    ephemeral=True
+                )
+            return
+        
+        result = fast_travel(channel_id, location)
+        
+        if result.get("error"):
+            await interaction.response.send_message(f"❌ {result['error']}", ephemeral=True)
+            return
+        
+        state = load_state(channel_id)
+        state["location"] = location
+        save_state(channel_id, state)
+        
+        embed = discord.Embed(
+            title="⚡ Fast Travel Complete",
+            description=f"Traveled from **{result['previous_location']}** to **{result['new_location']}**",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Distance", value=f"{result['distance']:.1f} miles", inline=True)
+        embed.add_field(name="Travel Time", value=f"{result['travel_time_days']} day(s)", inline=True)
+        embed.set_footer(text="The journey was uneventful along familiar roads")
+        
+        await interaction.response.send_message(embed=embed)
     
-    # Update world map
-    set_current_location(channel_id, location)
+    # === SET (current location) ===
+    elif action == "set":
+        if not location:
+            await interaction.response.send_message("❌ Specify a location with `location:`", ephemeral=True)
+            return
+        
+        set_current_location(channel_id, location)
+        
+        state = load_state(channel_id)
+        state["location"] = location
+        save_state(channel_id, state)
+        
+        loc = get_location(channel_id, location)
+        
+        embed = discord.Embed(
+            title="📍 Location Updated",
+            description=f"Party is now at **{location}**",
+            color=discord.Color.blue()
+        )
+        
+        if loc:
+            if loc.terrain != "wilderness":
+                embed.add_field(name="Terrain", value=loc.terrain.title(), inline=True)
+            if loc.location_type != "unknown":
+                embed.add_field(name="Type", value=loc.location_type.title(), inline=True)
+            if loc.visited_count > 0:
+                embed.add_field(name="Visits", value=str(loc.visited_count), inline=True)
+            if loc.connections:
+                conn_text = ", ".join([
+                    f"{dest} ({dist:.0f} mi)"
+                    for dest, dist in sorted(loc.connections.items(), key=lambda x: x[1])[:5]
+                ])
+                embed.add_field(name="Nearby", value=conn_text, inline=False)
+        
+        await interaction.response.send_message(embed=embed)
     
-    # Update campaign state
-    state = load_state(channel_id)
-    state["location"] = location
-    save_state(channel_id, state)
+    # === ADD (new location) ===
+    elif action == "add":
+        if not location:
+            await interaction.response.send_message("❌ Specify a location name with `location:`", ephemeral=True)
+            return
+        
+        new_loc = add_location(
+            channel_id=channel_id,
+            name=location,
+            terrain=terrain,
+            location_type=location_type,
+            description=description,
+            is_poi=is_poi,
+            status="known"
+        )
+        
+        if distance > 0:
+            current = get_current_location(channel_id)
+            if current:
+                connect_locations(channel_id, current, location, distance)
+        
+        embed = discord.Embed(
+            title="📍 Location Added",
+            description=f"**{location}** has been added to the world map",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Type", value=location_type.title(), inline=True)
+        embed.add_field(name="Terrain", value=terrain.title(), inline=True)
+        if is_poi:
+            embed.add_field(name="Point of Interest", value="⭐ Yes", inline=True)
+        if description:
+            embed.add_field(name="Description", value=description, inline=False)
+        if distance > 0:
+            embed.add_field(
+                name="Distance",
+                value=f"{distance:.0f} miles from current location",
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed)
     
-    # Get location info if it exists
-    loc = get_location(channel_id, location)
-    
-    embed = discord.Embed(
-        title="📍 Location Updated",
-        description=f"Party is now at **{location}**",
-        color=discord.Color.blue()
-    )
-    
-    if loc:
-        if loc.terrain != "wilderness":
-            embed.add_field(name="Terrain", value=loc.terrain.title(), inline=True)
-        if loc.location_type != "unknown":
-            embed.add_field(name="Type", value=loc.location_type.title(), inline=True)
+    # === INFO (detailed location view) ===
+    elif action == "info":
+        if not location:
+            location = get_current_location(channel_id)
+        
+        loc = get_location(channel_id, location)
+        
+        if not loc:
+            await interaction.response.send_message(
+                f"❌ Location **{location}** not found on the world map.",
+                ephemeral=True
+            )
+            return
+        
+        status_emoji = {
+            "unknown": "❓",
+            "heard_of": "👂",
+            "known": "📍",
+            "visited": "✅",
+            "explored": "🗺️"
+        }
+        
+        embed = discord.Embed(
+            title=f"{status_emoji.get(loc.status, '❓')} {'⭐ ' if loc.is_poi else ''}{loc.name}",
+            description=loc.description if loc.description else "*No description available*",
+            color=discord.Color.blue()
+        )
+        
+        embed.add_field(name="Type", value=loc.location_type.title(), inline=True)
+        embed.add_field(name="Terrain", value=loc.terrain.title(), inline=True)
+        embed.add_field(name="Status", value=loc.status.replace("_", " ").title(), inline=True)
+        
         if loc.visited_count > 0:
-            embed.add_field(name="Visits", value=str(loc.visited_count), inline=True)
+            embed.add_field(name="Times Visited", value=str(loc.visited_count), inline=True)
+            if loc.first_visited:
+                embed.add_field(name="First Visit", value=loc.first_visited[:10], inline=True)
+        
         if loc.connections:
-            conn_text = ", ".join([
-                f"{dest} ({dist:.0f} mi)"
-                for dest, dist in sorted(loc.connections.items(), key=lambda x: x[1])[:5]
+            conn_text = "\n".join([
+                f"→ {dest}: {dist:.0f} miles"
+                for dest, dist in sorted(loc.connections.items(), key=lambda x: x[1])
             ])
-            embed.add_field(name="Nearby", value=conn_text, inline=False)
-    
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="locationinfo", description="View detailed information about a location")
-@app_commands.describe(location="The location to view (leave blank for current)")
-async def locationinfo_cmd(
-    interaction: discord.Interaction,
-    location: str = ""
-):
-    """View detailed information about a location."""
-    channel_id = str(interaction.channel.id)
-    
-    if not location:
-        location = get_current_location(channel_id)
-    
-    loc = get_location(channel_id, location)
-    
-    if not loc:
-        await interaction.response.send_message(
-            f"❌ Location **{location}** not found on the world map.",
-            ephemeral=True
-        )
-        return
-    
-    status_emoji = {
-        "unknown": "❓",
-        "heard_of": "👂",
-        "known": "📍",
-        "visited": "✅",
-        "explored": "🗺️"
-    }
-    
-    embed = discord.Embed(
-        title=f"{status_emoji.get(loc.status, '❓')} {'⭐ ' if loc.is_poi else ''}{loc.name}",
-        description=loc.description if loc.description else "*No description available*",
-        color=discord.Color.blue()
-    )
-    
-    embed.add_field(name="Type", value=loc.location_type.title(), inline=True)
-    embed.add_field(name="Terrain", value=loc.terrain.title(), inline=True)
-    embed.add_field(name="Status", value=loc.status.replace("_", " ").title(), inline=True)
-    
-    if loc.visited_count > 0:
-        embed.add_field(name="Times Visited", value=str(loc.visited_count), inline=True)
-        if loc.first_visited:
-            embed.add_field(name="First Visit", value=loc.first_visited[:10], inline=True)
-    
-    if loc.connections:
-        conn_text = "\n".join([
-            f"→ {dest}: {dist:.0f} miles"
-            for dest, dist in sorted(loc.connections.items(), key=lambda x: x[1])
-        ])
-        embed.add_field(name="Connected Locations", value=conn_text, inline=False)
-    
-    if loc.tags:
-        embed.add_field(name="Tags", value=", ".join(loc.tags), inline=False)
-    
-    if loc.notes:
-        notes_text = "\n".join([f"• {note}" for note in loc.notes[-5:]])
-        embed.add_field(name="Notes", value=notes_text, inline=False)
-    
-    await interaction.response.send_message(embed=embed)
+            embed.add_field(name="Connected Locations", value=conn_text, inline=False)
+        
+        if loc.tags:
+            embed.add_field(name="Tags", value=", ".join(loc.tags), inline=False)
+        
+        if loc.notes:
+            notes_text = "\n".join([f"• {note}" for note in loc.notes[-5:]])
+            embed.add_field(name="Notes", value=notes_text, inline=False)
+        
+        await interaction.response.send_message(embed=embed)
 
 
 # =============================================================================
-# SESSION MANAGEMENT COMMANDS (Phase 15)
+# SESSION MANAGEMENT COMMANDS (CONSOLIDATED - Phase 15)
 # =============================================================================
 
-@bot.tree.command(name="session", description="View current session status or manage session")
+@bot.tree.command(name="session", description="Manage session - view, end, pause, recap, history, recover")
 @app_commands.describe(
-    action="Action to perform (view, end, pause)"
+    action="Action to perform"
 )
 @app_commands.choices(action=[
     app_commands.Choice(name="view", value="view"),
     app_commands.Choice(name="end", value="end"),
-    app_commands.Choice(name="pause", value="pause")
+    app_commands.Choice(name="pause", value="pause"),
+    app_commands.Choice(name="recap", value="recap"),
+    app_commands.Choice(name="history", value="history"),
+    app_commands.Choice(name="recover", value="recover"),
 ])
 async def session_cmd(
     interaction: discord.Interaction,
     action: str = "view"
 ):
-    """View or manage the current session."""
+    """Consolidated session management command."""
     channel_id = str(interaction.channel.id)
     state = load_state(channel_id)
     
+    # === VIEW ===
     if action == "view":
-        # Show session status
         status_text = format_session_status(channel_id)
         
-        # Add pacing info if session is active
         session = load_session_state(channel_id)
         if session.status == SessionStatus.ACTIVE.value:
             phase = get_current_pacing_phase(channel_id)
             duration = get_session_duration_minutes(channel_id)
             status_text += f"\n\n**Pacing:** {phase.value.title()} phase"
             
-            # Check for pacing hints
             hints = get_pacing_hints(channel_id)
             if hints:
                 status_text += f"\n💡 *Hint: {hints[0].hint}*"
         
         await interaction.response.send_message(status_text)
     
+    # === END ===
     elif action == "end":
-        # End the session
         session = load_session_state(channel_id)
         if session.status == SessionStatus.INACTIVE.value:
             await interaction.response.send_message("❌ No active session to end.")
@@ -3928,18 +3716,15 @@ async def session_cmd(
         
         await interaction.response.defer()
         
-        # Stop auto-save
         await auto_save_manager.stop_auto_save(channel_id)
         auto_save_manager.unregister_channel(channel_id)
         
-        # End session and generate summary
         summary = end_session(channel_id, state)
         
         if summary:
             summary_text = format_session_end_summary(summary)
             await interaction.followup.send(summary_text)
             
-            # Play ending TTS
             await play_tts(
                 interaction,
                 f"Session complete! You played for {summary.duration_minutes} minutes. See you next time!",
@@ -3948,6 +3733,7 @@ async def session_cmd(
         else:
             await interaction.followup.send("📊 Session ended.")
     
+    # === PAUSE ===
     elif action == "pause":
         session = load_session_state(channel_id)
         if session.status != SessionStatus.ACTIVE.value:
@@ -3959,174 +3745,154 @@ async def session_cmd(
             "⏸️ **Session Paused**\n"
             "Your progress has been saved. Resume anytime!"
         )
-
-
-@bot.tree.command(name="sessionrecap", description="Get a recap of the previous session")
-async def session_recap_cmd(interaction: discord.Interaction):
-    """Generate a recap of the last session."""
-    channel_id = str(interaction.channel.id)
-    state = load_state(channel_id)
     
-    await interaction.response.defer()
-    
-    # Check for session summaries
-    summaries = load_session_summaries(channel_id)
-    
-    if not summaries:
-        await interaction.followup.send(
-            "📖 No previous session found.\n"
-            "*Start a new campaign with `/campaign`!*"
-        )
-        return
-    
-    # Generate recap
-    recap_text = generate_session_recap(channel_id, state)
-    
-    embed = discord.Embed(
-        title="📖 Session Recap",
-        description=recap_text,
-        color=discord.Color.purple()
-    )
-    
-    last_session = summaries[-1]
-    embed.add_field(
-        name="Last Session Stats",
-        value=f"⏱️ Duration: {last_session.duration_minutes} min\n"
-              f"⚔️ Combats: {last_session.combat_count}\n"
-              f"🎯 Actions: {last_session.action_count}",
-        inline=True
-    )
-    
-    if last_session.active_quests:
-        embed.add_field(
-            name="Active Quests",
-            value="\n".join([f"• {q}" for q in last_session.active_quests[:3]]),
-            inline=True
-        )
-    
-    await interaction.followup.send(embed=embed)
-    
-    # Play recap TTS
-    tts_text = clean_for_tts(recap_text)
-    if len(tts_text) > 500:
-        tts_text = tts_text[:500] + "..."
-    await play_tts(interaction, tts_text, "Narrator")
-
-
-@bot.tree.command(name="sessionhistory", description="View past session summaries")
-async def session_history_cmd(interaction: discord.Interaction):
-    """View history of past sessions."""
-    channel_id = str(interaction.channel.id)
-    
-    summaries = load_session_summaries(channel_id)
-    
-    if not summaries:
-        await interaction.response.send_message(
-            "📚 No session history found.\n"
-            "*Sessions are saved when you use `/session end`.*"
-        )
-        return
-    
-    embed = discord.Embed(
-        title="📚 Session History",
-        description=f"Showing last {min(len(summaries), 10)} sessions",
-        color=discord.Color.blue()
-    )
-    
-    for i, summary in enumerate(reversed(summaries[-10:])):
-        started = summary.started_at[:10] if summary.started_at else "Unknown"
-        embed.add_field(
-            name=f"Session {len(summaries) - i}",
-            value=f"📅 {started}\n"
-                  f"⏱️ {summary.duration_minutes} min | ⚔️ {summary.combat_count} combats\n"
-                  f"📍 {summary.final_location}",
-            inline=True
-        )
-    
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="recover", description="Recover from a crashed session")
-async def recover_session_cmd(interaction: discord.Interaction):
-    """Attempt to recover from a crashed session."""
-    channel_id = str(interaction.channel.id)
-    
-    recovery = load_recovery_point(channel_id)
-    
-    if not recovery:
-        await interaction.response.send_message(
-            "❌ No recovery point found.\n"
-            "*Recovery points are automatically saved during sessions.*"
-        )
-        return
-    
-    await interaction.response.defer()
-    
-    saved_at = recovery.get("saved_at", "Unknown time")
-    campaign_state = recovery.get("campaign_state", {})
-    
-    if not campaign_state:
-        await interaction.followup.send("❌ Recovery point is empty or corrupted.")
-        return
-    
-    # Offer to restore
-    campaign_title = campaign_state.get("campaign_title", "Unknown Campaign")
-    location = campaign_state.get("location", "Unknown")
-    
-    embed = discord.Embed(
-        title="🔄 Recovery Point Found",
-        description=f"**Campaign:** {campaign_title}\n"
-                    f"**Location:** {location}\n"
-                    f"**Saved:** {saved_at}",
-        color=discord.Color.orange()
-    )
-    embed.add_field(
-        name="Restore?",
-        value="React with ✅ to restore this state, or ❌ to discard it.",
-        inline=False
-    )
-    
-    msg = await interaction.followup.send(embed=embed)
-    await msg.add_reaction("✅")
-    await msg.add_reaction("❌")
-    
-    def check(reaction, user):
-        return (
-            user == interaction.user and
-            str(reaction.emoji) in ["✅", "❌"] and
-            reaction.message.id == msg.id
-        )
-    
-    try:
-        reaction, user = await bot.wait_for("reaction_add", timeout=30.0, check=check)
+    # === RECAP ===
+    elif action == "recap":
+        await interaction.response.defer()
         
-        if str(reaction.emoji) == "✅":
-            # Restore the state
-            save_state(channel_id, campaign_state)
-            clear_recovery_point(channel_id)
-            
-            # Start a new session
-            player_ids = campaign_state.get("players", [str(interaction.user.id)])
-            start_session(channel_id, player_ids)
-            
-            await interaction.channel.send(
-                f"✅ **Recovery Complete!**\n"
-                f"Welcome back to **{campaign_title}**!\n"
-                f"You're in {location}. Use `/recap` to refresh your memory."
+        summaries = load_session_summaries(channel_id)
+        
+        if not summaries:
+            await interaction.followup.send(
+                "📖 No previous session found.\n"
+                "*Start a new campaign with `/campaign`!*"
             )
-            
-            # Play welcome back TTS
-            await play_tts(
-                interaction,
-                f"Welcome back adventurers! You're in {location}.",
-                "Narrator"
+            return
+        
+        recap_text = generate_session_recap(channel_id, state)
+        
+        embed = discord.Embed(
+            title="📖 Session Recap",
+            description=recap_text,
+            color=discord.Color.purple()
+        )
+        
+        last_session = summaries[-1]
+        embed.add_field(
+            name="Last Session Stats",
+            value=f"⏱️ Duration: {last_session.duration_minutes} min\n"
+                  f"⚔️ Combats: {last_session.combat_count}\n"
+                  f"🎯 Actions: {last_session.action_count}",
+            inline=True
+        )
+        
+        if last_session.active_quests:
+            embed.add_field(
+                name="Active Quests",
+                value="\n".join([f"• {q}" for q in last_session.active_quests[:3]]),
+                inline=True
             )
-        else:
-            clear_recovery_point(channel_id)
-            await interaction.channel.send("🗑️ Recovery point discarded.")
+        
+        await interaction.followup.send(embed=embed)
+        
+        tts_text = clean_for_tts(recap_text)
+        if len(tts_text) > 500:
+            tts_text = tts_text[:500] + "..."
+        await play_tts(interaction, tts_text, "Narrator")
+    
+    # === HISTORY ===
+    elif action == "history":
+        summaries = load_session_summaries(channel_id)
+        
+        if not summaries:
+            await interaction.response.send_message(
+                "📚 No session history found.\n"
+                "*Sessions are saved when you use `/session action:end`.*"
+            )
+            return
+        
+        embed = discord.Embed(
+            title="📚 Session History",
+            description=f"Showing last {min(len(summaries), 10)} sessions",
+            color=discord.Color.blue()
+        )
+        
+        for i, summary in enumerate(reversed(summaries[-10:])):
+            started = summary.started_at[:10] if summary.started_at else "Unknown"
+            embed.add_field(
+                name=f"Session {len(summaries) - i}",
+                value=f"📅 {started}\n"
+                      f"⏱️ {summary.duration_minutes} min | ⚔️ {summary.combat_count} combats\n"
+                      f"📍 {summary.final_location}",
+                inline=True
+            )
+        
+        await interaction.response.send_message(embed=embed)
+    
+    # === RECOVER ===
+    elif action == "recover":
+        recovery = load_recovery_point(channel_id)
+        
+        if not recovery:
+            await interaction.response.send_message(
+                "❌ No recovery point found.\n"
+                "*Recovery points are automatically saved during sessions.*"
+            )
+            return
+        
+        await interaction.response.defer()
+        
+        saved_at = recovery.get("saved_at", "Unknown time")
+        campaign_state = recovery.get("campaign_state", {})
+        
+        if not campaign_state:
+            await interaction.followup.send("❌ Recovery point is empty or corrupted.")
+            return
+        
+        campaign_title = campaign_state.get("campaign_title", "Unknown Campaign")
+        location = campaign_state.get("location", "Unknown")
+        
+        embed = discord.Embed(
+            title="🔄 Recovery Point Found",
+            description=f"**Campaign:** {campaign_title}\n"
+                        f"**Location:** {location}\n"
+                        f"**Saved:** {saved_at}",
+            color=discord.Color.orange()
+        )
+        embed.add_field(
+            name="Restore?",
+            value="React with ✅ to restore this state, or ❌ to discard it.",
+            inline=False
+        )
+        
+        msg = await interaction.followup.send(embed=embed)
+        await msg.add_reaction("✅")
+        await msg.add_reaction("❌")
+        
+        def check(reaction, user):
+            return (
+                user == interaction.user and
+                str(reaction.emoji) in ["✅", "❌"] and
+                reaction.message.id == msg.id
+            )
+        
+        try:
+            reaction, user = await bot.wait_for("reaction_add", timeout=30.0, check=check)
             
-    except asyncio.TimeoutError:
-        await interaction.channel.send("⏱️ Recovery timed out. Use `/recover` again when ready.")
+            if str(reaction.emoji) == "✅":
+                save_state(channel_id, campaign_state)
+                clear_recovery_point(channel_id)
+                
+                player_ids = campaign_state.get("players", [str(interaction.user.id)])
+                start_session(channel_id, player_ids)
+                
+                await interaction.channel.send(
+                    f"✅ **Recovery Complete!**\n"
+                    f"Welcome back to **{campaign_title}**!\n"
+                    f"You're in {location}. Use `/recap` to refresh your memory."
+                )
+                
+                await play_tts(
+                    interaction,
+                    f"Welcome back adventurers! You're in {location}.",
+                    "Narrator"
+                )
+            else:
+                clear_recovery_point(channel_id)
+                await interaction.channel.send("🗑️ Recovery point discarded.")
+                
+        except asyncio.TimeoutError:
+            await interaction.channel.send("⏱️ Recovery timed out. Use `/session action:recover` again when ready.")
 
 
 # =============================================================================
@@ -5788,7 +5554,7 @@ async def levelup_cmd(
 
 
 # =============================================================================
-# HANDOUT COMMANDS (DM Tools)
+# HANDOUT COMMANDS (Consolidated)
 # =============================================================================
 
 HANDOUT_TYPE_CHOICES = [
@@ -5802,72 +5568,307 @@ HANDOUT_TYPE_CHOICES = [
     app_commands.Choice(name="📖 Journal Entry", value="journal"),
 ]
 
-@bot.tree.command(name="handout", description="Create a handout to share with players")
+HANDOUT_ACTION_CHOICES = [
+    app_commands.Choice(name="📜 View - List your handouts", value="view"),
+    app_commands.Choice(name="📖 Read - Read a specific handout", value="read"),
+    app_commands.Choice(name="➕ Create - Create a new handout [DM]", value="create"),
+    app_commands.Choice(name="👁️ Reveal - Reveal to all players [DM]", value="reveal"),
+    app_commands.Choice(name="📤 Share - Share with a player [DM]", value="share"),
+    app_commands.Choice(name="🗑️ Delete - Delete a handout [DM]", value="delete"),
+    app_commands.Choice(name="📋 List All - View all handouts [DM]", value="list-all"),
+]
+
+@bot.tree.command(name="handout", description="Manage handouts and player documents")
 @app_commands.describe(
-    title="Title of the handout",
-    content="Text content of the handout",
-    handout_type="Type of handout",
-    image_url="URL to an image (optional)",
-    player="Share only with this player (optional, leave blank for all)"
+    action="What to do with handouts",
+    handout_id="Handout ID (for read, reveal, share, delete)",
+    title="Title (for create)",
+    content="Content text (for create)",
+    handout_type="Type of handout (for create)",
+    image_url="Image URL (for create)",
+    player="Player to share with (for create, share)"
 )
-@app_commands.choices(handout_type=HANDOUT_TYPE_CHOICES)
+@app_commands.choices(
+    action=HANDOUT_ACTION_CHOICES,
+    handout_type=HANDOUT_TYPE_CHOICES
+)
 async def handout_cmd(
     interaction: discord.Interaction,
-    title: str,
-    content: str,
+    action: str = "view",
+    handout_id: Optional[int] = None,
+    title: Optional[str] = None,
+    content: Optional[str] = None,
     handout_type: str = "note",
     image_url: Optional[str] = None,
     player: Optional[discord.Member] = None
 ):
-    """Create and share a handout with players."""
+    """Consolidated handout command."""
     channel_id = str(interaction.channel.id)
+    player_id = str(interaction.user.id)
     
-    # Determine visibility
-    visible_to = [str(player.id)] if player else None
+    # ─────────────────────────────────────────────────────────────────────────
+    # VIEW - List handouts for current player
+    # ─────────────────────────────────────────────────────────────────────────
+    if action == "view":
+        handouts = get_handouts_for_player(channel_id, player_id)
+        
+        if not handouts:
+            await interaction.response.send_message(
+                "📜 No handouts available yet.\n"
+                "*The DM can create handouts with `/handout action:create`*",
+                ephemeral=True
+            )
+            return
+        
+        # Mark all as read
+        for h in handouts:
+            mark_as_read(channel_id, h["id"], player_id)
+        
+        # Format handout list
+        output = "# 📜 Your Handouts\n\n"
+        
+        for handout in handouts:
+            emoji = get_handout_emoji(handout["type"])
+            output += f"{emoji} **{handout['title']}** (ID: {handout['id']})\n"
+            # Show preview of content
+            preview = handout["content"][:100]
+            if len(handout["content"]) > 100:
+                preview += "..."
+            output += f"*{preview}*\n\n"
+        
+        output += "*Use `/handout action:read handout_id:<id>` to view full content*"
+        
+        await interaction.response.send_message(output, ephemeral=True)
     
-    handout = create_handout(
-        channel_id=channel_id,
-        title=title,
-        content=content,
-        handout_type=handout_type,
-        image_url=image_url,
-        visible_to=visible_to,
-        created_by=str(interaction.user.id)
-    )
+    # ─────────────────────────────────────────────────────────────────────────
+    # READ - Read a specific handout
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "read":
+        if handout_id is None:
+            await interaction.response.send_message(
+                "❌ Required: `handout_id`\n"
+                "Example: `/handout action:read handout_id:1`",
+                ephemeral=True
+            )
+            return
+        
+        # Get handouts visible to this player
+        visible_handouts = get_handouts_for_player(channel_id, player_id)
+        handout = None
+        
+        for h in visible_handouts:
+            if h["id"] == handout_id:
+                handout = h
+                break
+        
+        if not handout:
+            await interaction.response.send_message(
+                "❌ Handout not found or you don't have access to it.",
+                ephemeral=True
+            )
+            return
+        
+        # Mark as read
+        mark_as_read(channel_id, handout_id, player_id)
+        
+        # Format and display
+        output = format_handout_display(handout)
+        
+        if handout.get("image_url"):
+            output += f"\n\n🖼️ {handout['image_url']}"
+        
+        await interaction.response.send_message(output, ephemeral=True)
     
-    emoji = get_handout_emoji(handout_type)
+    # ─────────────────────────────────────────────────────────────────────────
+    # CREATE - Create a new handout [DM]
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "create":
+        if not title or not content:
+            await interaction.response.send_message(
+                "❌ Required: `title`, `content`\n"
+                "Example: `/handout action:create title:Ancient Map content:This map shows...`",
+                ephemeral=True
+            )
+            return
+        
+        # Determine visibility
+        visible_to = [str(player.id)] if player else None
+        
+        handout = create_handout(
+            channel_id=channel_id,
+            title=title,
+            content=content,
+            handout_type=handout_type,
+            image_url=image_url,
+            visible_to=visible_to,
+            created_by=str(interaction.user.id)
+        )
+        
+        emoji = get_handout_emoji(handout_type)
+        
+        if player:
+            # Private handout - send to DM and notify player
+            await interaction.response.send_message(
+                f"{emoji} **Handout created for {player.display_name}:**\n"
+                f"*{title}*\n\n"
+                f"They can view it with `/handout action:view`",
+                ephemeral=True
+            )
+            
+            # DM the player about the new handout
+            try:
+                await player.send(
+                    f"{emoji} **New Handout: {title}**\n"
+                    f"───────────────────────\n"
+                    f"{content}\n"
+                    + (f"\n🖼️ {image_url}" if image_url else "")
+                )
+            except:
+                pass
+        else:
+            # Public handout - share with everyone
+            output = (
+                f"{emoji} **{title}**\n"
+                f"───────────────────────\n"
+                f"{content}"
+            )
+            if image_url:
+                output += f"\n\n🖼️ {image_url}"
+            
+            await interaction.response.send_message(output)
     
-    if player:
-        # Private handout - send to DM and notify player
+    # ─────────────────────────────────────────────────────────────────────────
+    # REVEAL - Reveal handout to all players [DM]
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "reveal":
+        if handout_id is None:
+            await interaction.response.send_message(
+                "❌ Required: `handout_id`\n"
+                "Example: `/handout action:reveal handout_id:1`",
+                ephemeral=True
+            )
+            return
+        
+        handout = reveal_handout(channel_id, handout_id)
+        
+        if not handout:
+            await interaction.response.send_message(
+                "❌ Handout not found.",
+                ephemeral=True
+            )
+            return
+        
+        # Show the handout to everyone
+        output = format_handout_display(handout)
+        
+        if handout.get("image_url"):
+            output += f"\n\n🖼️ {handout['image_url']}"
+        
         await interaction.response.send_message(
-            f"{emoji} **Handout created for {player.display_name}:**\n"
-            f"*{title}*\n\n"
-            f"They can view it with `/viewhandouts`",
+            f"📜 **The DM reveals a handout!**\n\n{output}"
+        )
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # SHARE - Share handout with a specific player [DM]
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "share":
+        if handout_id is None or not player:
+            await interaction.response.send_message(
+                "❌ Required: `handout_id`, `player`\n"
+                "Example: `/handout action:share handout_id:1 player:@Someone`",
+                ephemeral=True
+            )
+            return
+        
+        handout = share_handout_with(channel_id, handout_id, [str(player.id)])
+        
+        if not handout:
+            await interaction.response.send_message(
+                "❌ Handout not found.",
+                ephemeral=True
+            )
+            return
+        
+        await interaction.response.send_message(
+            f"📜 Shared **{handout['title']}** with {player.display_name}",
             ephemeral=True
         )
         
-        # DM the player about the new handout
+        # Try to notify the player
         try:
+            emoji = get_handout_emoji(handout["type"])
             await player.send(
-                f"{emoji} **New Handout: {title}**\n"
+                f"{emoji} **New Handout: {handout['title']}**\n"
                 f"───────────────────────\n"
-                f"{content}\n"
-                + (f"\n🖼️ {image_url}" if image_url else "")
+                f"{handout['content']}\n"
+                + (f"\n🖼️ {handout['image_url']}" if handout.get('image_url') else "")
             )
         except:
-            # Can't DM player, they'll see it with /viewhandouts
             pass
-    else:
-        # Public handout - share with everyone
-        output = (
-            f"{emoji} **{title}**\n"
-            f"───────────────────────\n"
-            f"{content}"
-        )
-        if image_url:
-            output += f"\n\n🖼️ {image_url}"
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # DELETE - Delete a handout [DM]
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "delete":
+        if handout_id is None:
+            await interaction.response.send_message(
+                "❌ Required: `handout_id`\n"
+                "Example: `/handout action:delete handout_id:1`",
+                ephemeral=True
+            )
+            return
         
-        await interaction.response.send_message(output)
+        if delete_handout(channel_id, handout_id):
+            await interaction.response.send_message(
+                f"🗑️ Handout #{handout_id} deleted.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "❌ Handout not found.",
+                ephemeral=True
+            )
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # LIST-ALL - View all handouts [DM]
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "list-all":
+        handouts = get_all_handouts(channel_id)
+        
+        if not handouts:
+            await interaction.response.send_message(
+                "📜 No handouts created yet.\n"
+                "Use `/handout action:create` to create one!",
+                ephemeral=True
+            )
+            return
+        
+        output = "# 📜 All Campaign Handouts\n\n"
+        
+        for handout in handouts:
+            emoji = get_handout_emoji(handout["type"])
+            
+            # Visibility info
+            if handout["visible_to"] is None:
+                visibility = "👁️ Everyone"
+            else:
+                count = len(handout["visible_to"])
+                visibility = f"🔒 {count} player(s)"
+            
+            # Read status
+            read_count = len(handout.get("read_by", []))
+            
+            output += (
+                f"{emoji} **{handout['title']}** (ID: {handout['id']})\n"
+                f"   Type: {handout['type']} | {visibility} | Read by: {read_count}\n\n"
+            )
+        
+        output += (
+            "───────────────────────\n"
+            "**Actions:** create, reveal, share, delete"
+        )
+        
+        await interaction.response.send_message(output, ephemeral=True)
 
 
 @bot.tree.command(name="secret", description="Send a secret message to a specific player")
@@ -5908,80 +5909,7 @@ async def secret_cmd(
             f"*Only you can see this message.*"
         )
     except:
-        # Can't DM, they'll see it with /mysecrets
         pass
-
-
-@bot.tree.command(name="viewhandouts", description="View handouts shared with you")
-async def viewhandouts_cmd(interaction: discord.Interaction):
-    """View all handouts visible to you."""
-    channel_id = str(interaction.channel.id)
-    player_id = str(interaction.user.id)
-    
-    handouts = get_handouts_for_player(channel_id, player_id)
-    
-    if not handouts:
-        await interaction.response.send_message(
-            "📜 No handouts available yet.\n"
-            "*The DM can create handouts with `/handout`*",
-            ephemeral=True
-        )
-        return
-    
-    # Mark all as read
-    for h in handouts:
-        mark_as_read(channel_id, h["id"], player_id)
-    
-    # Format handout list
-    output = "# 📜 Your Handouts\n\n"
-    
-    for handout in handouts:
-        emoji = get_handout_emoji(handout["type"])
-        output += f"{emoji} **{handout['title']}** (ID: {handout['id']})\n"
-        # Show preview of content
-        preview = handout["content"][:100]
-        if len(handout["content"]) > 100:
-            preview += "..."
-        output += f"*{preview}*\n\n"
-    
-    output += "*Use `/readhandout <id>` to view the full handout*"
-    
-    await interaction.response.send_message(output, ephemeral=True)
-
-
-@bot.tree.command(name="readhandout", description="Read a specific handout")
-@app_commands.describe(handout_id="The ID of the handout to read")
-async def readhandout_cmd(interaction: discord.Interaction, handout_id: int):
-    """Read the full content of a specific handout."""
-    channel_id = str(interaction.channel.id)
-    player_id = str(interaction.user.id)
-    
-    # Get handouts visible to this player
-    visible_handouts = get_handouts_for_player(channel_id, player_id)
-    handout = None
-    
-    for h in visible_handouts:
-        if h["id"] == handout_id:
-            handout = h
-            break
-    
-    if not handout:
-        await interaction.response.send_message(
-            "❌ Handout not found or you don't have access to it.",
-            ephemeral=True
-        )
-        return
-    
-    # Mark as read
-    mark_as_read(channel_id, handout_id, player_id)
-    
-    # Format and display
-    output = format_handout_display(handout)
-    
-    if handout.get("image_url"):
-        output += f"\n\n🖼️ {handout['image_url']}"
-    
-    await interaction.response.send_message(output, ephemeral=True)
 
 
 @bot.tree.command(name="mysecrets", description="View secrets shared with you")
@@ -6016,139 +5944,8 @@ async def mysecrets_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(output, ephemeral=True)
 
 
-@bot.tree.command(name="dmhandouts", description="[DM] View all handouts in this campaign")
-async def dmhandouts_cmd(interaction: discord.Interaction):
-    """View all handouts (DM only view with visibility info)."""
-    channel_id = str(interaction.channel.id)
-    
-    handouts = get_all_handouts(channel_id)
-    
-    if not handouts:
-        await interaction.response.send_message(
-            "📜 No handouts created yet.\n"
-            "Use `/handout` to create one!",
-            ephemeral=True
-        )
-        return
-    
-    output = "# 📜 All Campaign Handouts\n\n"
-    
-    for handout in handouts:
-        emoji = get_handout_emoji(handout["type"])
-        
-        # Visibility info
-        if handout["visible_to"] is None:
-            visibility = "👁️ Everyone"
-        else:
-            count = len(handout["visible_to"])
-            visibility = f"🔒 {count} player(s)"
-        
-        # Read status
-        read_count = len(handout.get("read_by", []))
-        
-        output += (
-            f"{emoji} **{handout['title']}** (ID: {handout['id']})\n"
-            f"   Type: {handout['type']} | {visibility} | Read by: {read_count}\n\n"
-        )
-    
-    output += (
-        "───────────────────────\n"
-        "**Commands:**\n"
-        "• `/handout` - Create new handout\n"
-        "• `/revealhandout <id>` - Reveal to all players\n"
-        "• `/sharehandout <id> <player>` - Share with specific player\n"
-        "• `/deletehandout <id>` - Delete a handout"
-    )
-    
-    await interaction.response.send_message(output, ephemeral=True)
-
-
-@bot.tree.command(name="revealhandout", description="[DM] Reveal a handout to all players")
-@app_commands.describe(handout_id="The ID of the handout to reveal")
-async def revealhandout_cmd(interaction: discord.Interaction, handout_id: int):
-    """Reveal a previously private handout to all players."""
-    channel_id = str(interaction.channel.id)
-    
-    handout = reveal_handout(channel_id, handout_id)
-    
-    if not handout:
-        await interaction.response.send_message(
-            "❌ Handout not found.",
-            ephemeral=True
-        )
-        return
-    
-    # Show the handout to everyone
-    output = format_handout_display(handout)
-    
-    if handout.get("image_url"):
-        output += f"\n\n🖼️ {handout['image_url']}"
-    
-    await interaction.response.send_message(
-        f"📜 **The DM reveals a handout!**\n\n{output}"
-    )
-
-
-@bot.tree.command(name="sharehandout", description="[DM] Share a handout with a specific player")
-@app_commands.describe(
-    handout_id="The ID of the handout",
-    player="The player to share with"
-)
-async def sharehandout_cmd(
-    interaction: discord.Interaction,
-    handout_id: int,
-    player: discord.Member
-):
-    """Share a handout with a specific player."""
-    channel_id = str(interaction.channel.id)
-    
-    handout = share_handout_with(channel_id, handout_id, [str(player.id)])
-    
-    if not handout:
-        await interaction.response.send_message(
-            "❌ Handout not found.",
-            ephemeral=True
-        )
-        return
-    
-    await interaction.response.send_message(
-        f"📜 Shared **{handout['title']}** with {player.display_name}",
-        ephemeral=True
-    )
-    
-    # Try to notify the player
-    try:
-        emoji = get_handout_emoji(handout["type"])
-        await player.send(
-            f"{emoji} **New Handout: {handout['title']}**\n"
-            f"───────────────────────\n"
-            f"{handout['content']}\n"
-            + (f"\n🖼️ {handout['image_url']}" if handout.get('image_url') else "")
-        )
-    except:
-        pass
-
-
-@bot.tree.command(name="deletehandout", description="[DM] Delete a handout")
-@app_commands.describe(handout_id="The ID of the handout to delete")
-async def deletehandout_cmd(interaction: discord.Interaction, handout_id: int):
-    """Delete a handout permanently."""
-    channel_id = str(interaction.channel.id)
-    
-    if delete_handout(channel_id, handout_id):
-        await interaction.response.send_message(
-            f"🗑️ Handout #{handout_id} deleted.",
-            ephemeral=True
-        )
-    else:
-        await interaction.response.send_message(
-            "❌ Handout not found.",
-            ephemeral=True
-        )
-
-
 # =============================================================================
-# TACTICAL MAP COMMANDS
+# TACTICAL MAP COMMANDS (Consolidated)
 # =============================================================================
 
 MAP_TEMPLATE_CHOICES = [
@@ -6158,257 +5955,27 @@ MAP_TEMPLATE_CHOICES = [
     app_commands.Choice(name="🕳️ Cave", value="cave"),
 ]
 
-@bot.tree.command(name="map", description="View the current tactical map")
-async def map_cmd(interaction: discord.Interaction):
-    """Display the current tactical map."""
-    channel_id = str(interaction.channel.id)
-    
-    map_obj = load_map(channel_id)
-    if not map_obj:
-        await interaction.response.send_message(
-            "🗺️ No map active.\n"
-            "Use `/newmap` to create one!",
-            ephemeral=True
-        )
-        return
-    
-    await interaction.response.send_message(map_obj.render_discord())
+MAP_ACTION_CHOICES = [
+    app_commands.Choice(name="🗺️ View - Display current map", value="view"),
+    app_commands.Choice(name="➕ Create - Create a new map", value="create"),
+    app_commands.Choice(name="🎯 Add Token - Place a token", value="add-token"),
+    app_commands.Choice(name="🏃 Move - Move a token", value="move"),
+    app_commands.Choice(name="🗑️ Remove - Remove a token", value="remove"),
+    app_commands.Choice(name="📏 Distance - Measure between tokens", value="distance"),
+    app_commands.Choice(name="🎯 Range - Find tokens in range", value="range"),
+    app_commands.Choice(name="🏔️ Terrain - Set terrain type", value="terrain"),
+    app_commands.Choice(name="❌ Clear - Delete the map", value="clear"),
+]
 
-
-@bot.tree.command(name="newmap", description="Create a new tactical map")
-@app_commands.describe(
-    template="Map template to use",
-    width="Map width in squares (5-30)",
-    height="Map height in squares (5-25)",
-    name="Name of the map"
-)
-@app_commands.choices(template=MAP_TEMPLATE_CHOICES)
-async def newmap_cmd(
-    interaction: discord.Interaction,
-    template: str = "dungeon",
-    width: int = 20,
-    height: int = 15,
-    name: str = "Battle Map"
-):
-    """Create a new tactical battle map."""
-    channel_id = str(interaction.channel.id)
-    
-    # Clamp dimensions
-    width = max(5, min(30, width))
-    height = max(5, min(25, height))
-    
-    # Create from template
-    map_obj = create_from_template(template, width=width, height=height, name=name)
-    if not map_obj:
-        map_obj = TacticalMap(width, height, name)
-    
-    save_map(channel_id, map_obj)
-    
-    await interaction.response.send_message(
-        f"🗺️ **New map created!**\n\n{map_obj.render_discord()}"
-    )
-
-
-@bot.tree.command(name="addtoken", description="Add a token to the map")
-@app_commands.describe(
-    name="Name of the character/creature",
-    x="X position (column)",
-    y="Y position (row)",
-    token_type="Type of token"
-)
-@app_commands.choices(token_type=[
+TOKEN_TYPE_CHOICES = [
     app_commands.Choice(name="🔵 Player", value="player"),
     app_commands.Choice(name="🔴 Enemy", value="enemy"),
     app_commands.Choice(name="🟢 NPC", value="npc"),
     app_commands.Choice(name="🟣 Boss", value="boss"),
     app_commands.Choice(name="⬜ Object", value="object"),
-])
-async def addtoken_cmd(
-    interaction: discord.Interaction,
-    name: str,
-    x: int,
-    y: int,
-    token_type: str = "player"
-):
-    """Add a token to the tactical map."""
-    channel_id = str(interaction.channel.id)
-    
-    map_obj = load_map(channel_id)
-    if not map_obj:
-        await interaction.response.send_message(
-            "No map active. Use `/newmap` first!",
-            ephemeral=True
-        )
-        return
-    
-    token = map_obj.add_token(name, x, y, token_type)
-    if not token:
-        await interaction.response.send_message(
-            f"❌ Position ({x},{y}) is out of bounds!",
-            ephemeral=True
-        )
-        return
-    
-    save_map(channel_id, map_obj)
-    
-    emoji = TOKEN_SYMBOLS.get(token_type, TOKEN_SYMBOLS["player"])["color"]
-    await interaction.response.send_message(
-        f"{emoji} **{name}** placed at ({x},{y})\n\n{map_obj.render_discord()}"
-    )
+]
 
-
-@bot.tree.command(name="movetoken", description="Move a token on the map")
-@app_commands.describe(
-    name="Name of the token to move",
-    x="New X position",
-    y="New Y position"
-)
-async def movetoken_cmd(
-    interaction: discord.Interaction,
-    name: str,
-    x: int,
-    y: int
-):
-    """Move a token to a new position."""
-    channel_id = str(interaction.channel.id)
-    
-    map_obj = load_map(channel_id)
-    if not map_obj:
-        await interaction.response.send_message(
-            "No map active.",
-            ephemeral=True
-        )
-        return
-    
-    old_pos = map_obj.move_token(name, x, y)
-    if old_pos is None:
-        await interaction.response.send_message(
-            f"❌ Token '{name}' not found or position out of bounds!",
-            ephemeral=True
-        )
-        return
-    
-    save_map(channel_id, map_obj)
-    
-    # Calculate distance moved
-    distance = max(abs(x - old_pos[0]), abs(y - old_pos[1])) * map_obj.scale
-    
-    await interaction.response.send_message(
-        f"🏃 **{name}** moved from ({old_pos[0]},{old_pos[1]}) to ({x},{y}) [{distance}ft]\n\n"
-        f"{map_obj.render_discord()}"
-    )
-
-
-@bot.tree.command(name="removetoken", description="Remove a token from the map")
-@app_commands.describe(name="Name of the token to remove")
-async def removetoken_cmd(interaction: discord.Interaction, name: str):
-    """Remove a token from the map."""
-    channel_id = str(interaction.channel.id)
-    
-    map_obj = load_map(channel_id)
-    if not map_obj:
-        await interaction.response.send_message("No map active.", ephemeral=True)
-        return
-    
-    if map_obj.remove_token(name):
-        save_map(channel_id, map_obj)
-        await interaction.response.send_message(
-            f"🗑️ **{name}** removed from the map.\n\n{map_obj.render_discord()}"
-        )
-    else:
-        await interaction.response.send_message(
-            f"❌ Token '{name}' not found.",
-            ephemeral=True
-        )
-
-
-@bot.tree.command(name="distance", description="Measure distance between two tokens")
-@app_commands.describe(
-    token1="First token name",
-    token2="Second token name"
-)
-async def distance_cmd(
-    interaction: discord.Interaction,
-    token1: str,
-    token2: str
-):
-    """Measure the distance between two tokens in feet."""
-    channel_id = str(interaction.channel.id)
-    
-    map_obj = load_map(channel_id)
-    if not map_obj:
-        await interaction.response.send_message("No map active.", ephemeral=True)
-        return
-    
-    distance = map_obj.get_distance(token1, token2)
-    if distance is None:
-        await interaction.response.send_message(
-            "❌ One or both tokens not found.",
-            ephemeral=True
-        )
-        return
-    
-    t1 = map_obj.get_token(token1)
-    t2 = map_obj.get_token(token2)
-    
-    await interaction.response.send_message(
-        f"📏 Distance from **{token1}** ({t1.x},{t1.y}) to **{token2}** ({t2.x},{t2.y}): **{distance} feet**"
-    )
-
-
-@bot.tree.command(name="inrange", description="Find all tokens within range of a target")
-@app_commands.describe(
-    name="Token to check from",
-    range_feet="Range in feet"
-)
-async def inrange_cmd(
-    interaction: discord.Interaction,
-    name: str,
-    range_feet: int = 30
-):
-    """Find all tokens within a certain range."""
-    channel_id = str(interaction.channel.id)
-    
-    map_obj = load_map(channel_id)
-    if not map_obj:
-        await interaction.response.send_message("No map active.", ephemeral=True)
-        return
-    
-    center = map_obj.get_token(name)
-    if not center:
-        await interaction.response.send_message(
-            f"❌ Token '{name}' not found.",
-            ephemeral=True
-        )
-        return
-    
-    in_range = map_obj.get_tokens_in_range(name, range_feet)
-    
-    if not in_range:
-        await interaction.response.send_message(
-            f"📏 No tokens within {range_feet}ft of **{name}**"
-        )
-        return
-    
-    token_list = []
-    for token in in_range:
-        dist = map_obj.get_distance(name, token.name)
-        emoji = TOKEN_SYMBOLS.get(token.token_type, TOKEN_SYMBOLS["player"])["color"]
-        token_list.append(f"{emoji} **{token.name}** - {dist}ft")
-    
-    await interaction.response.send_message(
-        f"📏 Tokens within {range_feet}ft of **{name}**:\n" +
-        "\n".join(token_list)
-    )
-
-
-@bot.tree.command(name="setterrain", description="Set terrain at a position")
-@app_commands.describe(
-    x="X position",
-    y="Y position",
-    terrain="Terrain type"
-)
-@app_commands.choices(terrain=[
+MAP_TERRAIN_CHOICES = [
     app_commands.Choice(name=". Floor", value="floor"),
     app_commands.Choice(name="# Wall", value="wall"),
     app_commands.Choice(name="~ Water", value="water"),
@@ -6418,43 +5985,290 @@ async def inrange_cmd(
     app_commands.Choice(name="O Pillar", value="pillar"),
     app_commands.Choice(name="T Tree", value="tree"),
     app_commands.Choice(name="^ Rubble", value="rubble"),
-])
-async def setterrain_cmd(
+]
+
+@bot.tree.command(name="map", description="Manage tactical battle maps")
+@app_commands.describe(
+    action="What to do with the map",
+    name="Token/map name (for add-token, move, remove, distance, range, create)",
+    x="X position (for add-token, move, terrain)",
+    y="Y position (for add-token, move, terrain)",
+    token_type="Type of token (for add-token)",
+    template="Map template (for create)",
+    width="Map width 5-30 (for create)",
+    height="Map height 5-25 (for create)",
+    target="Second token name (for distance)",
+    range_feet="Range in feet (for range)",
+    terrain="Terrain type (for terrain)"
+)
+@app_commands.choices(
+    action=MAP_ACTION_CHOICES,
+    token_type=TOKEN_TYPE_CHOICES,
+    template=MAP_TEMPLATE_CHOICES,
+    terrain=MAP_TERRAIN_CHOICES
+)
+async def map_cmd(
     interaction: discord.Interaction,
-    x: int,
-    y: int,
-    terrain: str
+    action: str = "view",
+    name: Optional[str] = None,
+    x: Optional[int] = None,
+    y: Optional[int] = None,
+    token_type: str = "player",
+    template: str = "dungeon",
+    width: int = 20,
+    height: int = 15,
+    target: Optional[str] = None,
+    range_feet: int = 30,
+    terrain: str = "floor"
 ):
-    """Set the terrain at a specific position."""
+    """Consolidated tactical map command."""
     channel_id = str(interaction.channel.id)
     
-    map_obj = load_map(channel_id)
-    if not map_obj:
-        await interaction.response.send_message("No map active.", ephemeral=True)
-        return
+    # ─────────────────────────────────────────────────────────────────────────
+    # VIEW - Display current map
+    # ─────────────────────────────────────────────────────────────────────────
+    if action == "view":
+        map_obj = load_map(channel_id)
+        if not map_obj:
+            await interaction.response.send_message(
+                "🗺️ No map active.\n"
+                "Use `/map action:create` to create one!",
+                ephemeral=True
+            )
+            return
+        await interaction.response.send_message(map_obj.render_discord())
     
-    if map_obj.set_terrain(x, y, terrain):
+    # ─────────────────────────────────────────────────────────────────────────
+    # CREATE - Create a new map
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "create":
+        map_name = name or "Battle Map"
+        # Clamp dimensions
+        width = max(5, min(30, width))
+        height = max(5, min(25, height))
+        
+        # Create from template
+        map_obj = create_from_template(template, width=width, height=height, name=map_name)
+        if not map_obj:
+            map_obj = TacticalMap(width, height, map_name)
+        
         save_map(channel_id, map_obj)
-        terrain_name = TERRAIN_TYPES.get(terrain, {}).get("name", terrain)
+        
         await interaction.response.send_message(
-            f"🗺️ Set ({x},{y}) to **{terrain_name}**\n\n{map_obj.render_discord()}"
+            f"🗺️ **New map created!**\n\n{map_obj.render_discord()}"
         )
-    else:
-        await interaction.response.send_message(
-            f"❌ Position ({x},{y}) is out of bounds!",
-            ephemeral=True
-        )
-
-
-@bot.tree.command(name="clearmap", description="Delete the current map")
-async def clearmap_cmd(interaction: discord.Interaction):
-    """Delete the current tactical map."""
-    channel_id = str(interaction.channel.id)
     
-    if delete_map(channel_id):
-        await interaction.response.send_message("🗑️ Map deleted.")
-    else:
-        await interaction.response.send_message("No map to delete.", ephemeral=True)
+    # ─────────────────────────────────────────────────────────────────────────
+    # ADD-TOKEN - Place a token on the map
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "add-token":
+        if not name or x is None or y is None:
+            await interaction.response.send_message(
+                "❌ Required: `name`, `x`, `y`\n"
+                "Example: `/map action:add-token name:Goblin x:5 y:3`",
+                ephemeral=True
+            )
+            return
+        
+        map_obj = load_map(channel_id)
+        if not map_obj:
+            await interaction.response.send_message(
+                "No map active. Use `/map action:create` first!",
+                ephemeral=True
+            )
+            return
+        
+        token = map_obj.add_token(name, x, y, token_type)
+        if not token:
+            await interaction.response.send_message(
+                f"❌ Position ({x},{y}) is out of bounds!",
+                ephemeral=True
+            )
+            return
+        
+        save_map(channel_id, map_obj)
+        
+        emoji = TOKEN_SYMBOLS.get(token_type, TOKEN_SYMBOLS["player"])["color"]
+        await interaction.response.send_message(
+            f"{emoji} **{name}** placed at ({x},{y})\n\n{map_obj.render_discord()}"
+        )
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # MOVE - Move a token to a new position
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "move":
+        if not name or x is None or y is None:
+            await interaction.response.send_message(
+                "❌ Required: `name`, `x`, `y`\n"
+                "Example: `/map action:move name:Goblin x:8 y:5`",
+                ephemeral=True
+            )
+            return
+        
+        map_obj = load_map(channel_id)
+        if not map_obj:
+            await interaction.response.send_message("No map active.", ephemeral=True)
+            return
+        
+        old_pos = map_obj.move_token(name, x, y)
+        if old_pos is None:
+            await interaction.response.send_message(
+                f"❌ Token '{name}' not found or position out of bounds!",
+                ephemeral=True
+            )
+            return
+        
+        save_map(channel_id, map_obj)
+        
+        # Calculate distance moved
+        distance = max(abs(x - old_pos[0]), abs(y - old_pos[1])) * map_obj.scale
+        
+        await interaction.response.send_message(
+            f"🏃 **{name}** moved from ({old_pos[0]},{old_pos[1]}) to ({x},{y}) [{distance}ft]\n\n"
+            f"{map_obj.render_discord()}"
+        )
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # REMOVE - Remove a token from the map
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "remove":
+        if not name:
+            await interaction.response.send_message(
+                "❌ Required: `name`\n"
+                "Example: `/map action:remove name:Goblin`",
+                ephemeral=True
+            )
+            return
+        
+        map_obj = load_map(channel_id)
+        if not map_obj:
+            await interaction.response.send_message("No map active.", ephemeral=True)
+            return
+        
+        if map_obj.remove_token(name):
+            save_map(channel_id, map_obj)
+            await interaction.response.send_message(
+                f"🗑️ **{name}** removed from the map.\n\n{map_obj.render_discord()}"
+            )
+        else:
+            await interaction.response.send_message(
+                f"❌ Token '{name}' not found.",
+                ephemeral=True
+            )
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # DISTANCE - Measure distance between two tokens
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "distance":
+        if not name or not target:
+            await interaction.response.send_message(
+                "❌ Required: `name`, `target`\n"
+                "Example: `/map action:distance name:Player target:Goblin`",
+                ephemeral=True
+            )
+            return
+        
+        map_obj = load_map(channel_id)
+        if not map_obj:
+            await interaction.response.send_message("No map active.", ephemeral=True)
+            return
+        
+        dist = map_obj.get_distance(name, target)
+        if dist is None:
+            await interaction.response.send_message(
+                "❌ One or both tokens not found.",
+                ephemeral=True
+            )
+            return
+        
+        t1 = map_obj.get_token(name)
+        t2 = map_obj.get_token(target)
+        
+        await interaction.response.send_message(
+            f"📏 Distance from **{name}** ({t1.x},{t1.y}) to **{target}** ({t2.x},{t2.y}): **{dist} feet**"
+        )
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # RANGE - Find all tokens within range
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "range":
+        if not name:
+            await interaction.response.send_message(
+                "❌ Required: `name`\n"
+                "Example: `/map action:range name:Player range_feet:30`",
+                ephemeral=True
+            )
+            return
+        
+        map_obj = load_map(channel_id)
+        if not map_obj:
+            await interaction.response.send_message("No map active.", ephemeral=True)
+            return
+        
+        center = map_obj.get_token(name)
+        if not center:
+            await interaction.response.send_message(
+                f"❌ Token '{name}' not found.",
+                ephemeral=True
+            )
+            return
+        
+        in_range = map_obj.get_tokens_in_range(name, range_feet)
+        
+        if not in_range:
+            await interaction.response.send_message(
+                f"📏 No tokens within {range_feet}ft of **{name}**"
+            )
+            return
+        
+        token_list = []
+        for token in in_range:
+            dist = map_obj.get_distance(name, token.name)
+            emoji = TOKEN_SYMBOLS.get(token.token_type, TOKEN_SYMBOLS["player"])["color"]
+            token_list.append(f"{emoji} **{token.name}** - {dist}ft")
+        
+        await interaction.response.send_message(
+            f"📏 Tokens within {range_feet}ft of **{name}**:\n" +
+            "\n".join(token_list)
+        )
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # TERRAIN - Set terrain at a position
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "terrain":
+        if x is None or y is None:
+            await interaction.response.send_message(
+                "❌ Required: `x`, `y`\n"
+                "Example: `/map action:terrain x:5 y:3 terrain:wall`",
+                ephemeral=True
+            )
+            return
+        
+        map_obj = load_map(channel_id)
+        if not map_obj:
+            await interaction.response.send_message("No map active.", ephemeral=True)
+            return
+        
+        if map_obj.set_terrain(x, y, terrain):
+            save_map(channel_id, map_obj)
+            terrain_name = TERRAIN_TYPES.get(terrain, {}).get("name", terrain)
+            await interaction.response.send_message(
+                f"🗺️ Set ({x},{y}) to **{terrain_name}**\n\n{map_obj.render_discord()}"
+            )
+        else:
+            await interaction.response.send_message(
+                f"❌ Position ({x},{y}) is out of bounds!",
+                ephemeral=True
+            )
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # CLEAR - Delete the current map
+    # ─────────────────────────────────────────────────────────────────────────
+    elif action == "clear":
+        if delete_map(channel_id):
+            await interaction.response.send_message("🗑️ Map deleted.")
+        else:
+            await interaction.response.send_message("No map to delete.", ephemeral=True)
 
 
 # =============================================================================
