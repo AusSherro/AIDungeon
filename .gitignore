@@ -57,3 +57,12 @@ voice_profiles.json
 # Personal/local config
 agents.md
 ROADMAP.md
+
+# BMAD local configuration and output
+_bmad/
+_bmad-output/
+_bmad-memory/
+
+# Local development
+.cursor/
+.claude/

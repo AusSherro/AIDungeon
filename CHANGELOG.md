@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+### BMAD Skills Integration
+- **Added bmad-distillator skill**: LLM-optimized document compression and distillation
+- **Added bmad-document-project skill**: Comprehensive project documentation from brownfield codebases
+- **Added bmad-domain-research skill**: Multi-step domain and industry research workflow
+- **Updated .gitignore**: Excluded _bmad/, _bmad-output/, and _bmad-memory/ from version control
+
 ## [6.0.0] - 2026-03-22
 ### Phase 6: Polish (Stabilization Plan)
 
