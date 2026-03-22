@@ -1,5 +1,395 @@
 # Changelog
 
+## [6.0.0] - 2026-03-22
+### Phase 6: Polish (Stabilization Plan)
+
+#### Cluster 6.1 — TTS as Optional Feature
+- **Added `is_available()` to elevenlabs_service.py**: Returns whether TTS is configured (checks provider and API key)
+- **Wired `Config.TTS_ENABLED` into `play_tts()`**: Now checks both the config flag and `TTS_PROVIDER` before attempting any TTS; previously `Config.TTS_ENABLED` was defined but unused
+- **TTS already well-gated**: All 13 callers properly `await` play_tts; errors caught with `logger.warning` (non-blocking); verified no bare elevenlabs imports
+
+| File | Change |
+|------|--------|
+| `services/elevenlabs_service.py` | Added `is_available()` function |
+| `cogs/shared.py` | `play_tts()` now checks `Config.TTS_ENABLED` in addition to `TTS_PROVIDER` |
+
+#### Cluster 6.2 — Web Portal Update
+- **Removed dnd5e_data silent fallback**: `webportal/routes.py` now imports dnd5e_data directly (fails loudly); removed `DND_DATA_AVAILABLE` flag and 2 conditional guards
+- **Added auth warning**: Docstring now includes `WARNING: No authentication. For local use only.` and `TODO: Add basic auth`
+- **All imports verified**: No Discord module dependencies, all utility imports resolve correctly
+
+| File | Change |
+|------|--------|
+| `webportal/routes.py` | Direct dnd5e_data import, removed DND_DATA_AVAILABLE guards, added auth warning |
+
+#### Cluster 6.3 — Basic Test Suite
+- **Created 4 test files** with 20 tests covering dice rolling, state persistence, tag parsing, and character CRUD
+- **All 20 tests pass** (`pytest tests/ -v` — 0.14s)
+- **Added pytest to requirements.txt**
+
+| File | Change |
+|------|--------|
+| `tests/__init__.py` | Created (empty) |
+| `tests/test_dice_roller.py` | 6 tests: basic roll, multiple dice, modifiers, d100, parse_dice |
+| `tests/test_state_manager.py` | 3 tests: missing state defaults, save/load roundtrip, corrupted file recovery |
+| `tests/test_tag_parser.py` | 7 tests: combat tags (with/without space, lowercase), quest tags, strip_tags, multiple tags, no tags |
+| `tests/test_character_manager.py` | 4 tests: register/load, damage/heal, damage floor, heal cap |
+| `requirements.txt` | Added `pytest>=7.0.0` |
+
+## [5.0.0] - 2026-03-22
+### Phase 5: World Systems (Stabilization Plan)
+
+#### Cluster 5.1 — NPC Manager Fixes
+- **Fixed gender detection scope**: `detect_gender()` now accepts `npc_name` parameter and only counts pronouns in sentences that mention the NPC, preventing "he walked to where she stood" from giving random results
+- **Applied buy_rate to buy_from_shop()**: Shop buy_rate multiplier now consistently applied to both buying and selling transactions
+- **Verified shop save persistence**: Both `buy_from_shop()` and `sell_to_shop()` confirmed to call `save_npcs()` — no fix needed
+- **NPC memory cap uses config**: `record_npc_interaction()` now uses `MAX_NPC_MEMORY_FACTS` (50) from config instead of hardcoded 20
+- **Voice assignment crash protection**: `assign_voice_to_npc()` wrapped in try/except; returns `(None, 'narrator')` on any failure
+
+| File | Change |
+|------|--------|
+| `utils/npc_manager.py` | `detect_gender()` scoped to NPC sentences, buy_rate applied in `buy_from_shop()`, config-based memory cap, voice assignment error handling |
+
+#### Cluster 5.2 — Environment & World Generator Fixes
+- **Flexible time parsing**: `parse_time_string()` now handles ranges ("4 to 5 hours" → 4), vague durations ("a few hours" → 3, "several hours" → 5, "couple hours" → 2), and minutes ("30 minutes" → 1 hour minimum)
+- **Fixed indoor lighting override**: `update_lighting_for_time()` now checks `LOCATION_PRESETS` `is_outdoor` flag and location memory instead of relying on light source string whitelist; caves and dungeons no longer get time-of-day lighting
+- **Added override parameter to apply_location_preset()**: When `override=False`, custom lighting set manually is preserved instead of being stomped by the preset
+- **Verified TimeState rollover**: `advance()` already uses `while` loops for correct multi-day cascading — no fix needed
+
+| File | Change |
+|------|--------|
+| `utils/world_generator.py` | Flexible time parsing, preset-based outdoor detection in `update_lighting_for_time()`, `override` param on `apply_location_preset()` |
+
+#### Cluster 5.3 — Travel & World Map Fixes
+- **Narrowed travel detection**: `detect_natural_language_travel()` now accepts `known_locations` list; checks known locations first (high confidence 0.9), then falls back to capitalized proper nouns only; expanded blocklist of generic words ("madness", "battle", "death", etc.)
+- **Verified fast travel terrain fallback**: Already uses `.get(terrain, {}).get("speed_mult", 1.0)` — no fix needed
+- **Normalized location keys to lowercase**: `add_location()` now stores keys as `name.lower()`; `get_location()` does direct lowercase lookup with fallback iteration for legacy data; `fast_travel()` and `get_world_context_for_ai()` use lowercase lookups
+- **Fixed encounter night detection**: `advance_travel()` now uses `world_generator.get_time_state()` to determine actual in-game night (hour >= 20 or < 6) instead of `hours_traveled_today > 12`
+- **Removed orphan ENCOUNTER_MULTIPLIERS dict**: Unused dict constant removed; `get_encounter_multiplier()` function already uses correct hardcoded if/elif chain per DMG pg. 82
+
+| File | Change |
+|------|--------|
+| `utils/world_map.py` | Known-locations-first travel detection, lowercase location keys, fallback-safe dict lookups |
+| `utils/encounter_manager.py` | Game-time night detection in `advance_travel()`, removed unused ENCOUNTER_MULTIPLIERS dict |
+
+## [4.0.0] - 2026-03-22
+### Phase 4: Character & Progression (Stabilization Plan)
+
+#### Cluster 4.1 — Character Manager Fixes
+- **Fixed HP floor on CON decrease**: `set_stat()` now enforces `max_hp = max(1, ...)` so HP never drops below 1 when CON is reduced
+- **Death save stabilization clears conditions**: After 3 successful death saves, `dead`, `unconscious`, and `dying` conditions are automatically stripped from the character
+- **Clarified Lay on Hands pool**: Added comment confirming `level * 5` is correct per D&D 5e Paladin rules
+- **Clarified warlock pact slot recovery**: Added comment explaining why warlock slots use `pact_slots_used` (separate from `spell_slots`) per D&D 5e Pact Magic rules; recovery on short rest was already implemented correctly
+- **Removed dnd5e_data silent fallback**: `dnd5e_data` import now fails loudly on startup instead of silently degrading; removed `DND_DATA_AVAILABLE` flag and all 11 conditional guards throughout the file; eliminated dead fallback code branches
+
+| File | Change |
+|------|--------|
+| `utils/character_manager.py` | HP floor on CON decrease, death save condition clearing, lay_on_hands comment, warlock comment, removed try/except import + DND_DATA_AVAILABLE flag and all conditional branches |
+
+#### Cluster 4.2 — Quest → XP → Rewards Pipeline
+- **Wired up quest reward distribution**: `/questcomplete` now actually distributes rewards to party members — XP split evenly (with remainder to first players), gold split evenly (with remainder), items added to completing player's inventory, reputation changes applied via `modify_faction_standing()`
+- **Fixed apostrophe handling in quest tag parser**: `parse_quest_tag_attributes()` now uses separate double-quote and single-quote patterns instead of a combined `[^"']+` class that rejected apostrophes inside double-quoted values
+- **Added duplicate check to rumor→quest conversion**: `convert_rumor_to_quest()` now checks `get_quest_by_name()` before creating, preventing duplicate quests from the same rumor
+- **Level-up notifications**: Quest completion embed now shows level-up announcements when XP gain triggers a level increase
+
+| File | Change |
+|------|--------|
+| `utils/quest_manager.py` | Fixed `parse_quest_tag_attributes()` regex for apostrophes, added dedup check in `convert_rumor_to_quest()` |
+| `cogs/social.py` | `/questcomplete` now distributes XP, gold, items, and reputation to party; imported `award_xp` from `xp_manager` |
+
+## [3.4.0] - 2026-03-22
+### Phase 3: Combat (Stabilization Plan)
+
+#### Cluster 3.3 — Combat → Loot → Inventory Pipeline
+- **Persisted pending loot to disk**: `_pending_loot` now saved to `state/loot/{channel}_loot.json` with atomic writes (tempfile + os.replace); `_load_pending_loot()` loads on demand from disk into memory cache; all loot functions (`claim_loot_item`, `claim_loot_gold`, `get_pending_loot`, `format_pending_loot`, `clear_pending_loot`) now use persistent storage
+- **Fixed gold splitting remainder**: `claim_loot_gold(amount=None, party_user_ids=[...])` now splits evenly with `//` and gives remainder (1 gp) to first player instead of losing it
+- **Fixed `claim_loot_gold(amount=None)`**: now splits evenly among party when `party_user_ids` provided, instead of giving all gold to the first claimant
+- **Unified loot pipeline**: created `generate_and_register_loot()` in `combat_trigger.py` as the single entry point — generates loot AND registers claimable pile in `inventory_manager`; `process_post_combat()` now calls this single function instead of manually orchestrating two modules
+- **Removed duplicate loot path**: `process_post_combat()` no longer imports from `loot_manager.py`; `loot_manager.py` kept for its `format_loot_display`, `generate_treasure_hoard`, and manual `/loot` command in utility cog
+- **Fixed `/splitgold` command**: now uses `claim_loot_gold` with `party_user_ids` for consistent splitting logic and persistence
+
+| File | Change |
+|------|--------|
+| `utils/inventory_manager.py` | Persistent loot storage (LOOT_DIR, _save/_load), gold split with remainder, party-aware claim_loot_gold |
+| `utils/combat_trigger.py` | Added `generate_and_register_loot()` — unified loot pipeline entry point |
+| `utils/combat_flow.py` | Simplified `process_post_combat()` to use single `generate_and_register_loot()` call |
+| `cogs/utility.py` | `/splitgold` now uses `claim_loot_gold` with party_user_ids |
+
+#### Cluster 3.2 — Combat Flow + Enemy AI Fixes
+- **Refactored turn timer to use `asyncio.Event`** for race-free cancellation: `TurnTimerState` now has a `cancelled` Event; `_run_timer()` uses `asyncio.wait_for()` on the Event instead of `asyncio.sleep()` + stale-check pattern; callback exceptions caught and suppressed (no timer leaks)
+- **Added `cleanup_channel()` method** to `CombatTimerManager`: cleans up both `_active_timers` and `_callbacks` dicts on combat end; `_run_timer` always cleans up via `finally` block
+- **Improved enemy narration fallback** in `cogs/combat.py`: builds per-action mechanical descriptions (hit/miss/damage) instead of joining raw description strings
+- **Removed competing loot fallback** from `process_post_combat()`: removed `generate_enemy_loot` import from loot_manager; error path now logs and shows user message instead of falling back to broken system
+
+| File | Change |
+|------|--------|
+| `utils/combat_flow.py` | asyncio.Event timer, cleanup_channel(), removed loot_manager fallback, logger-based error reporting |
+| `cogs/combat.py` | Enhanced narration fallback with per-action mechanical descriptions |
+
+#### Cluster 3.1 — Combat Manager Bug Fixes
+- **Fixed critical hit damage** in `utils/combat_manager.py`: crits now roll damage dice twice and add modifier once (D&D 5e RAW), instead of doubling the total result
+- **Added Dex tiebreaker to initiative sorting**: tied initiatives now break on `init_bonus` (all 3 sort sites updated)
+- **Added condition duration tracking**: `apply_status()` now accepts optional `duration` parameter; conditions stored as `{name, duration}` dicts in a new `conditions` list; durations auto-decrement at start of turn in `next_turn()`; expired conditions auto-removed from both `conditions` and legacy `status` lists
+- **Normalized combatant IDs to strings**: players use `str(user_id)`, enemies get unique `"enemy_{name}_{index}"` IDs — no more `None` or mixed types
+- **Guarded against missing initiative key**: all sorting lambdas use `.get('initiative', 0)` and `.get('init_bonus', 0)`
+
+| File | Change |
+|------|--------|
+| `utils/combat_manager.py` | Crit damage fix (parse_dice + extra dice roll), Dex tiebreaker in 3 sort sites, condition duration tracking in next_turn/apply_status, string ID normalization in start_combat/_expand_enemy/add_combatant_mid_combat, safe .get() in all sort keys |
+
+## [3.3.0] - 2026-03-22
+### Phase 2: Core Game Loop (Stabilization Plan)
+
+#### Cluster 2.4 — OpenAI Service Hardening
+- **Hardened `services/openai_service.py`** for reliability:
+  - Added `import openai` and centralized `_handle_openai_error()` helper with themed user-facing messages per exception type
+  - All 10 API call sites now catch `openai.APIConnectionError`, `openai.RateLimitError`, `openai.APIStatusError` separately before generic `Exception` fallback
+  - History trimming now preserves first 2 messages (campaign setup context) + last N, instead of just slicing from the end
+  - Added missing `timeout=30` to `extract_npcs_and_quests()` API call
+  - All error paths verified to return a string (never None or re-raised exception)
+
+| File | Change |
+|------|--------|
+| `services/openai_service.py` | Specific OpenAI exceptions, smart history trim, _handle_openai_error helper, timeout on all calls |
+
+#### Cluster 2.3 — Prompt Builder Overhaul
+- **Rewrote `utils/prompt_builder.py`** for token-budgeted, prioritized context:
+  - Moved all 9 context source imports to top-level (no more `try: from ... except: pass` inside the function)
+  - Added token budget system (`MAX_CONTEXT_CHARS = 6000`, ~1500 tokens) — context sections added in priority order and stop when budget reached
+  - Priority order: combat > campaign_summary > quests > NPCs > environment > world > travel > pacing > map > inventory
+  - `campaign_summary` from state now included as high-priority context (was missing before)
+  - Tag instructions condensed to single-line format per tag type (removed verbose multi-paragraph examples)
+  - Tag sections are conditional: combat tags hidden during active combat, travel tags hidden during active travel
+  - Action suggestions only shown when not in combat and not asking for a roll
+
+| File | Change |
+|------|--------|
+| `utils/prompt_builder.py` | Rewritten — top-level imports, token budget, prioritized context, condensed conditional tag instructions |
+
+#### Cluster 2.2 — AI Tag Detection Overhaul
+- **Created `utils/tag_parser.py`** — unified parser for all structured tags in AI narration:
+  - Single forgiving regex `[TAG_NAME: content]` (case-insensitive, flexible whitespace)
+  - `parse_all_tags(text) -> ParsedTags` dataclass with fields for all 20+ tag types
+  - `parse_attributes(attr_string)` handles `key="value"`, `key='value'`, `key=value`, and apostrophes in values
+  - `strip_tags(text)` removes all `[TAG: ...]` blocks from display text
+- **Updated `utils/combat_trigger.py`** — `detect_structured_combat()` and `detect_combat_trigger()` now accept optional `parsed: ParsedTags` to avoid re-parsing; surprise tags now extracted from parsed tags
+- **Updated `utils/quest_manager.py`** — `detect_structured_quest_tags()` now uses `ParsedTags` instead of 7 separate regex patterns; imports `parse_attributes` from tag_parser
+- **Updated `utils/world_generator.py`** — `detect_structured_tags()` now uses `ParsedTags` lists instead of individual regex matches
+- **Updated `utils/world_map.py`** — `detect_structured_travel_tag()`, `detect_arrival_tag()`, `detect_location_discovered_tag()`, `detect_distance_revealed_tag()` all accept optional pre-parsed tags; `process_narration_for_travel()` pre-parses once and passes through
+
+| File | Change |
+|------|--------|
+| `utils/tag_parser.py` | Created — unified tag parser with ParsedTags dataclass, parse_attributes, strip_tags |
+| `utils/combat_trigger.py` | Updated detection functions to accept optional ParsedTags |
+| `utils/quest_manager.py` | Updated detect_structured_quest_tags to use ParsedTags |
+| `utils/world_generator.py` | Updated detect_structured_tags to use ParsedTags |
+| `utils/world_map.py` | Updated all detection functions and process_narration_for_travel to use ParsedTags |
+
+#### Cluster 2.1 — /do Action Loop Reliability
+- **Refactored `/do` command** in `cogs/campaign.py` for resilient subsystem handling:
+  - Replaced 6 separate notification string variables (`trap_notification`, `npc_notification`, `quest_notification`, `env_notification`, `travel_notification`, `combat_notification`) with a single `notifications: list[str]` pattern
+  - Wrapped every subsystem call (resource consumption, trap detection, attack intent, NPC detection, quest processing, environment detection, travel detection, loot processing, skill checks, combat triggers) in isolated `try/except` blocks with `logger.error(..., exc_info=True)` for full tracebacks
+  - Moved `save_state()` into a `finally` block so state is always persisted, even on partial failure
+  - OpenAI failure now returns a clear user-facing error message instead of continuing with no narration
+  - Removed all bare `except: pass` patterns — every error is now logged
+
+| File | Change |
+|------|--------|
+| `cogs/campaign.py` | Refactored `/do` command: notifications list, isolated error handling, finally-block state save |
+
+### Phase 1: The Cog Split (Stabilization Plan)
+
+Splitting the monolithic `discord_bot.py` into focused discord.py Cog modules for maintainability.
+
+### Cluster 1.1 — Cog Infrastructure + Campaign Core
+- **Created `cogs/` package** with `__init__.py` listing all 6 planned cogs
+- **Created `cogs/shared.py`** — shared state and helpers used across cogs:
+  - `voice_manager` (VoiceClientManager singleton)
+  - `_active_channels` dict (channel references for timer callbacks)
+  - `play_tts()` function (TTS playback helper)
+  - `SkillCheckConfig`, `SkillCheckRollButton`, `prompt_skill_check()`, `process_completed_skill_check()`, `check_and_prompt_passive_perception()` (skill check system)
+- **Created `cogs/campaign.py`** — `CampaignCog` with 6 extracted commands:
+  - `/campaign` — start a new D&D campaign
+  - `/do` — core game loop (player action → AI response → subsystem processing)
+  - `/context` — show AI campaign memory
+  - `/summarize` — save events to long-term memory
+  - `/remember` — manually add notes/NPCs/quests
+  - `/help` — display available commands
+- **Modified `discord_bot.py`**:
+  - Imports shared state from `cogs.shared` instead of defining locally
+  - `on_ready()` now loads cogs via `bot.load_extension()` before syncing commands
+  - Removed ~1,011 lines of extracted code (6 commands + shared helpers)
+  - Remaining commands stay in `discord_bot.py` for extraction in clusters 1.2–1.6
+
+### Files Changed
+| File | Change |
+|------|--------|
+| `cogs/__init__.py` | Created — COGS list for all 6 planned cog modules |
+| `cogs/shared.py` | Created — shared state, play_tts, skill check system |
+| `cogs/campaign.py` | Created — CampaignCog with /campaign, /do, /context, /summarize, /remember, /help |
+| `discord_bot.py` | Removed extracted code, added cog loading in on_ready(), imports from cogs.shared |
+
+### Cluster 1.2 — Combat Cog
+- **Created `cogs/combat.py`** — `CombatCog` with 9 extracted commands:
+  - `/fight` — start combat with enemies (simple/custom/multiplier formats)
+  - `/attack` — player attack roll against target
+  - `/nextturn` — advance to next combatant (auto-executes enemy turns)
+  - `/endcombat` — end combat, award XP and loot
+  - `/hp` — manage HP (damage/heal/set)
+  - `/deathsave` — roll death saving throws
+  - `/combatinfo` — show combat status and turn order
+  - `/turntimer` — configure combat turn timer
+  - `/timeleft` — check remaining turn time
+- **Moved combat timer callbacks** to `cogs/combat.py`:
+  - `on_turn_warning()`, `on_turn_timeout()`, `setup_timer_callbacks()`
+- **Moved combat helper functions** to `cogs/combat.py`:
+  - `execute_and_narrate_enemy_turn()`, `check_legendary_actions()`, `execute_legendary_action()`, `process_and_send_lair_action()`
+- **Modified `discord_bot.py`**: Removed ~585 lines of combat code
+
+| File | Change |
+|------|--------|
+| `cogs/combat.py` | Created — CombatCog with 9 combat commands + timer callbacks + helpers |
+| `discord_bot.py` | Removed combat commands, timer callbacks, and combat helper functions |
+
+### Cluster 1.3 — Character Cog
+- **Created `cogs/character.py`** (998 lines) — `CharacterCog` with 20 extracted commands:
+  - `/character`, `/stats` — view/create character, set stats
+  - `/roll` — dice rolling with inline roll support
+  - `/groupcheck`, `/savingthrow`, `/passivecheck` — skill check commands
+  - `/rest` — short/long rest recovery
+  - `/inventory` — view/add/remove items
+  - `/attune`, `/unattune`, `/attunement` — magic item attunement
+  - `/encumbrance` — carry weight check
+  - `/spells`, `/cast`, `/prepare`, `/learn` — spellcasting system
+  - `/resources` — class resource management
+  - `/levelup` — level up character
+  - `/xp`, `/awardparty` — XP tracking
+- **Moved constants** `DND_CLASSES`, `DND_RACES`, `SKILL_CHOICES`, `ABILITY_CHOICES` into cog
+- **Modified `discord_bot.py`**: Removed ~959 lines of character code (5422 → 4463 lines)
+
+| File | Change |
+|------|--------|
+| `cogs/character.py` | Created — CharacterCog with 20 character management commands |
+| `discord_bot.py` | Removed character commands and related section headers |
+
+### Cluster 1.4 — World & Environment Cog
+- **Created `cogs/world.py`** (1431 lines) — `WorldCog` with all world/environment commands:
+  - `/environment` — view environmental conditions
+  - `/trap` — create/list/detect/disarm/trigger traps (consolidated)
+  - `/weather` — set/view weather conditions
+  - `/lighting` — set/view lighting
+  - `/time` — view/advance/set in-game time
+  - `/location` — set location with auto-preset
+  - `/hazard` — create/list hazards
+  - `/terrain` — create/list terrain zones
+  - `/cover` — calculate cover between positions
+  - `/travel` — start/status/advance/cancel journeys (consolidated)
+  - `/encounter` — generate/check encounters (consolidated)
+  - `/worldmap` — view/fasttravel/add/set locations (consolidated)
+- **Modified `discord_bot.py`**: Removed ~1,371 lines (4463 → 3092 lines)
+
+| File | Change |
+|------|--------|
+| `cogs/world.py` | Created — WorldCog with 12 commands covering all 23 original world commands |
+| `discord_bot.py` | Removed world/environment/travel/encounter commands |
+
+### Cluster 1.5 — Social Cog (NPCs + Quests)
+- **Created `cogs/social.py`** (1018 lines) — `SocialCog` with 19 separate slash commands:
+  - `/npc`, `/npcdisposition` — NPC viewing and relationship management
+  - `/faction`, `/reputation` — faction system
+  - `/shop`, `/buy`, `/sell` — merchant system
+  - `/quest`, `/quests`, `/questtemplate`, `/questobjective`, `/questprogress`, `/questnote`, `/questcomplete`, `/questabandon` — quest management
+  - `/rumors`, `/investigaterumor` — rumor system
+  - `/questchain`, `/acceptquest` — quest chains
+- **Modified `discord_bot.py`**: Removed ~994 lines (3092 → 2098 lines)
+
+| File | Change |
+|------|--------|
+| `cogs/social.py` | Created — SocialCog with 19 NPC/quest/faction/shop commands |
+| `discord_bot.py` | Removed NPC and quest commands |
+
+### Cluster 1.6 — Utility Cog + Session Cog + Final Cleanup
+- **Created `cogs/utility.py`** (1406 lines) — `UtilityCog` with 25 remaining commands:
+  - `/say`, `/done`, `/status`, `/recap` — campaign flow
+  - `/handout`, `/secret`, `/mysecrets` — handout/secrets system
+  - `/map` — tactical battle maps
+  - `/ambient`, `/sfx` — audio/mood
+  - `/reaction` — combat reactions
+  - `/loot`, `/treasure`, `/identify`, `/lootpile`, `/claimloot`, `/claimgold`, `/splitgold` — loot system
+  - `/exportlog` — session logging
+  - `/voice`, `/turns`, `/leave`, `/joinvoice`, `/reconnect` — voice/settings
+  - `/party` — party status dashboard
+- **Created `cogs/session.py`** (395 lines) — `SessionCog` with:
+  - `/session` — manage session (view/end/pause/recap/history/recover)
+  - `on_voice_state_update` listener for auto-resume
+- **Updated `cogs/__init__.py`**: Added `"cogs.session"` to COGS list (7 cogs total)
+- **Trimmed `discord_bot.py`** from 2,098 → **39 lines** (clean bot shell)
+  - Only contains: imports, bot setup, on_ready cog loader, and bot.run()
+  - Zero utility/service imports — everything lives in cogs
+  - Zero circular imports
+
+| File | Change |
+|------|--------|
+| `cogs/utility.py` | Created — UtilityCog with 25 utility/loot/voice/settings commands |
+| `cogs/session.py` | Created — SessionCog with /session + voice state listener |
+| `cogs/__init__.py` | Updated — added cogs.session (7 cogs total) |
+| `discord_bot.py` | Trimmed to 39-line bot shell (was 7,000+ lines before Phase 1) |
+
+---
+
+## [3.2.0] - 2026-03-22
+### Phase 0: Foundation (Stabilization Plan)
+
+Foundation hardening to make the codebase reliable before further development. No feature changes — just fixes to persistence, error handling, and configuration.
+
+### Cluster 0.1 — State Manager Hardening
+- **Atomic file writes**: `save_state()` now writes to a temp file then uses `os.replace()` — crash mid-write no longer corrupts JSON
+- **Meta-lock for thread safety**: Lock creation protected by `_meta_lock` to prevent race conditions between threads
+- **Load locking**: `load_state()` now acquires session lock (prevents read-then-stale-write races)
+- **Corrupted file recovery**: Bad JSON files renamed to `.corrupted` instead of silently returning defaults
+- **DEFAULT_STATE updated**: Added missing `session_active` and `session_started_at` keys
+- **Removed bare except**: Backup cleanup `except: pass` replaced with proper handling
+- Removed `shutil` dependency (no longer needed)
+
+### Cluster 0.2 — Error Handling + Logging
+- **Structured logging**: `utils/logger.py` now provides `setup_logging()` with `RotatingFileHandler` (5MB, 3 backups) writing to `logs/bot.log`
+- **Console**: Only warnings and errors shown on console
+- **Zero bare excepts**: All 9 bare `except:` blocks in `discord_bot.py` replaced with specific handlers:
+  - `discord.HTTPException` for message edit failures
+  - `discord.Forbidden` for DM send failures
+  - `(ValueError, IndexError)` for dice/count parsing
+  - `Exception` with logging for narration fallbacks
+- **All `print()` replaced**: 13 `print()` calls in `discord_bot.py` and 11 in `services/openai_service.py` replaced with `logger.info/warning/error`
+- `setup_logging()` called at bot startup before any other code runs
+
+### Cluster 0.3 — Config Consolidation
+- **New config values in `config.py`**:
+  - `MAX_PROMPT_HISTORY = 20` (was hardcoded as 10)
+  - `COMBAT_TURN_TIMEOUT = 90`, `COMBAT_TURN_WARNING = 30`
+  - `AUTO_SAVE_INTERVAL = 300`, `INACTIVITY_TIMEOUT = 1800`
+  - `SKILL_CHECK_TIMEOUT = 60`
+  - `AI_MODEL = "gpt-4o"`, `AI_MAX_TOKENS = 500`, `AI_TEMPERATURE = 0.9`
+  - `TTS_ENABLED` (from env var)
+  - `MAX_NPC_MEMORY_FACTS = 50`
+  - `DEFAULT_DIFFICULTY = "normal"`
+- **`services/openai_service.py`**: All 10 `model="gpt-4o"` references now use `Config.AI_MODEL`; history window uses `Config.MAX_PROMPT_HISTORY` (20); `timeout=30` added to all API calls
+- **`utils/session_manager.py`**: `AUTO_SAVE_INTERVAL` and `INACTIVITY_TIMEOUT` sourced from Config
+- **`utils/combat_flow.py`**: `CombatFlowConfig.TURN_TIMEOUT_SECONDS` and `WARNING_SECONDS` sourced from Config
+- **`discord_bot.py`**: `SkillCheckConfig.ROLL_TIMEOUT_SECONDS` sourced from Config
+
+### Files Changed
+| File | Changes |
+|------|---------|
+| `utils/state_manager.py` | Atomic writes, meta-lock, load locking, corruption recovery |
+| `utils/logger.py` | Added `setup_logging()` with rotating file handler |
+| `discord_bot.py` | Logging setup, 9 bare excepts fixed, 13 prints replaced, config imports |
+| `config.py` | 12 new configuration constants added |
+| `services/openai_service.py` | Config imports, logger, timeout on all API calls |
+| `utils/session_manager.py` | Config imports for intervals |
+| `utils/combat_flow.py` | Config imports for timer values |
+
+---
+
 ## [3.1.0] - 2024-12-07
 ### Phase 16: Command Consolidation
 

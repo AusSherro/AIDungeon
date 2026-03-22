@@ -31,9 +31,14 @@ from utils.dice_roller import roll_dice
 class CombatFlowConfig:
     """Configuration for combat flow automation."""
     
-    # Turn timer settings
-    TURN_TIMEOUT_SECONDS: int = 90  # Default timeout per turn
-    WARNING_SECONDS: int = 30  # Seconds before timeout to send warning
+    # Turn timer settings (sourced from config.py)
+    try:
+        from config import Config as _Cfg
+        TURN_TIMEOUT_SECONDS: int = _Cfg.COMBAT_TURN_TIMEOUT
+        WARNING_SECONDS: int = _Cfg.COMBAT_TURN_WARNING
+    except ImportError:
+        TURN_TIMEOUT_SECONDS: int = 90
+        WARNING_SECONDS: int = 30
     
     # Auto-advance settings
     AUTO_EXECUTE_ENEMY_TURNS: bool = True
@@ -65,6 +70,7 @@ class TurnTimerState:
     timeout_seconds: int = CombatFlowConfig.TURN_TIMEOUT_SECONDS
     warning_sent: bool = False
     timer_task: Optional[asyncio.Task] = None
+    cancelled: asyncio.Event = field(default_factory=asyncio.Event)
     
     @property
     def elapsed_seconds(self) -> float:
@@ -163,7 +169,10 @@ class CombatTimerManager:
         if channel_id not in self._active_timers:
             return False
         
-        timer_state = self._active_timers[channel_id]
+        timer_state = self._active_timers.pop(channel_id)
+        
+        # Signal cancellation via Event
+        timer_state.cancelled.set()
         
         if timer_state.timer_task and not timer_state.timer_task.done():
             timer_state.timer_task.cancel()
@@ -172,7 +181,6 @@ class CombatTimerManager:
             except asyncio.CancelledError:
                 pass
         
-        del self._active_timers[channel_id]
         return True
     
     def get_timer_state(self, channel_id: str) -> Optional[TurnTimerState]:
@@ -184,48 +192,74 @@ class CombatTimerManager:
         timer = self._active_timers.get(channel_id)
         return int(timer.remaining_seconds) if timer else None
     
+    async def cleanup_channel(self, channel_id: str):
+        """Clean up all timer state for a channel (call on combat end)."""
+        await self.cancel_timer(channel_id)
+        self._callbacks.pop(channel_id, None)
+    
     async def _run_timer(self, timer_state: TurnTimerState):
-        """Internal timer loop that handles warnings and timeout."""
+        """Internal timer loop using asyncio.Event for race-free cancellation."""
         try:
-            # Wait until warning time
+            # Wait until warning time OR cancellation
             warning_wait = timer_state.timeout_seconds - CombatFlowConfig.WARNING_SECONDS
             if warning_wait > 0:
-                await asyncio.sleep(warning_wait)
+                try:
+                    await asyncio.wait_for(
+                        timer_state.cancelled.wait(),
+                        timeout=warning_wait
+                    )
+                    return  # Cancelled
+                except asyncio.TimeoutError:
+                    pass  # Timer expired naturally, send warning
             
-            # Check if still active (turn might have ended)
-            if timer_state.channel_id not in self._active_timers:
+            # Check if cancelled during wait
+            if timer_state.cancelled.is_set():
                 return
             
             # Send warning
             timer_state.warning_sent = True
             callbacks = self._callbacks.get(timer_state.channel_id, {})
             if 'on_warning' in callbacks:
-                await callbacks['on_warning'](
-                    timer_state.channel_id,
-                    timer_state.player_id,
-                    int(timer_state.remaining_seconds)
-                )
+                try:
+                    await callbacks['on_warning'](
+                        timer_state.channel_id,
+                        timer_state.player_id,
+                        int(timer_state.remaining_seconds)
+                    )
+                except Exception:
+                    pass  # Don't let callback errors kill the timer
             
-            # Wait for remaining time
-            await asyncio.sleep(timer_state.remaining_seconds)
+            # Wait for remaining time OR cancellation
+            remaining = max(0, timer_state.remaining_seconds)
+            if remaining > 0:
+                try:
+                    await asyncio.wait_for(
+                        timer_state.cancelled.wait(),
+                        timeout=remaining
+                    )
+                    return  # Cancelled
+                except asyncio.TimeoutError:
+                    pass  # Timer expired, auto-advance
             
-            # Check if still active
-            if timer_state.channel_id not in self._active_timers:
+            # Check if cancelled during wait
+            if timer_state.cancelled.is_set():
                 return
             
-            # Timeout - trigger auto-pass
+            # Timeout — trigger auto-pass
             if 'on_timeout' in callbacks:
-                await callbacks['on_timeout'](
-                    timer_state.channel_id,
-                    timer_state.combatant_name
-                )
-            
-            # Clean up
-            if timer_state.channel_id in self._active_timers:
-                del self._active_timers[timer_state.channel_id]
+                try:
+                    await callbacks['on_timeout'](
+                        timer_state.channel_id,
+                        timer_state.combatant_name
+                    )
+                except Exception:
+                    pass  # Don't let callback errors leak
                 
         except asyncio.CancelledError:
             pass  # Timer was cancelled (turn ended normally)
+        finally:
+            # Always clean up
+            self._active_timers.pop(timer_state.channel_id, None)
 
 
 # Global timer manager instance
@@ -801,7 +835,6 @@ def process_post_combat(
         PostCombatResult with XP, loot, and level-up info
     """
     from utils.xp_manager import award_party_xp, XP_THRESHOLDS
-    from utils.loot_manager import generate_enemy_loot
     from utils.character_manager import load_character
     
     result = PostCombatResult()
@@ -831,75 +864,40 @@ def process_post_combat(
                 f"🎉 **Level Up!** {', '.join(result.level_ups)}"
             )
     
-    # ==== PHASE 11: Enhanced Loot Generation ====
-    # Generate loot from ALL defeated enemies using the new system
+    # Generate loot via the unified pipeline
     if end_result.defeated_enemies:
         try:
-            from utils.combat_trigger import generate_loot_for_enemies, format_post_combat_loot
-            from utils.inventory_manager import create_loot_distribution, add_unidentified_item
+            from utils.combat_trigger import generate_and_register_loot
             
-            # Generate loot based on all defeated enemies
-            loot = generate_loot_for_enemies(
+            loot = generate_and_register_loot(
+                channel_id,
                 end_result.defeated_enemies,
                 party_size=len(player_ids) if player_ids else 1
             )
             
-            # Create a claimable loot pile
-            loot_items = loot.get('items', [])
-            magic_items = loot.get('magic_items', [])
             gold = loot.get('gold', 0)
+            items = loot.get('items', [])
+            magic_items = loot.get('magic_items', [])
             
-            # Add unidentified magic items
-            unidentified_items = []
-            for magic_item in magic_items:
-                if not magic_item.get('identified', True):
-                    # Add as unidentified
-                    unidentified_items.append({
-                        'display_name': f"Mysterious {magic_item.get('rarity', 'magic')} item",
-                        'true_name': magic_item['name'],
-                        'rarity': magic_item.get('rarity', 'common')
-                    })
-                else:
-                    loot_items.append(magic_item['name'])
-            
-            # Create the loot distribution for claiming
-            if loot_items or gold > 0 or unidentified_items:
-                create_loot_distribution(
-                    channel_id,
-                    items=loot_items,
-                    gold=gold,
-                    source=f"Defeated {len(end_result.defeated_enemies)} enemies"
-                )
+            if gold > 0 or items or magic_items:
+                result.loot = loot
                 
-                result.loot = {
-                    'gold': gold,
-                    'items': loot_items,
-                    'magic_items': unidentified_items
-                }
-                
-                # Build loot summary
                 result.summary_lines.append("\n💰 **LOOT FOUND!**")
                 if gold > 0:
                     result.summary_lines.append(f"  • **Gold:** {gold} gp")
-                if loot_items:
-                    result.summary_lines.append(f"  • **Items:** {', '.join(loot_items)}")
-                if unidentified_items:
-                    result.summary_lines.append(f"  • **Magic Items:** {len(unidentified_items)} unidentified ✨")
-                    result.summary_lines.append("    *Use `/identify <item>` to identify magic items*")
+                if items:
+                    result.summary_lines.append(f"  • **Items:** {', '.join(items)}")
+                if magic_items:
+                    unidentified = [m for m in magic_items if not m.get('identified', True)]
+                    if unidentified:
+                        result.summary_lines.append(f"  • **Magic Items:** {len(unidentified)} unidentified ✨")
+                        result.summary_lines.append("    *Use `/identify <item>` to identify magic items*")
                 
                 result.summary_lines.append("*Use `/claimloot <item>` to claim, `/splitgold` to divide gold.*")
         except Exception as e:
-            # Fallback to old loot system
-            print(f"Phase 11 loot generation error: {e}")
-            toughest = max(
-                end_result.defeated_enemies,
-                key=lambda e: e.get('xp', 0)
-            )
-            cr = int(str(toughest.get('cr', '1')).split('/')[0]) if toughest.get('cr') else 1
-            result.loot = generate_enemy_loot(toughest['name'], cr)
-            
-            if result.loot:
-                result.summary_lines.append("💰 **Loot Found!**")
+            import logging
+            logging.getLogger(__name__).error(f"Loot generation failed: {e}")
+            result.summary_lines.append("⚠️ *Loot generation encountered an error.*")
     
     # Short rest option
     if result.can_short_rest:

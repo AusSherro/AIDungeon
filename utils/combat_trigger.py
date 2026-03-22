@@ -19,6 +19,8 @@ from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
 
+from utils.tag_parser import parse_all_tags, ParsedTags
+
 
 # =============================================================================
 # ENUMS & DATA CLASSES
@@ -251,28 +253,35 @@ def build_enemy_list(enemy_specs: List[EnemySpec]) -> List[Dict[str, Any]]:
 # COMBAT TRIGGER DETECTION
 # =============================================================================
 
-def detect_structured_combat(text: str) -> Optional[CombatTriggerResult]:
+def detect_structured_combat(text: str, parsed: Optional[ParsedTags] = None) -> Optional[CombatTriggerResult]:
     """
     Detect structured combat tag in AI response.
     
     Format: [COMBAT: 3 goblins, 1 hobgoblin captain]
     """
-    match = STRUCTURED_COMBAT_PATTERN.search(text)
-    if not match:
+    if parsed is None:
+        parsed = parse_all_tags(text)
+
+    if not parsed.combat:
         return None
-    
-    enemies_text = match.group(1)
+
+    enemies_text = parsed.combat[0]["enemies"]
     enemy_specs = parse_enemy_list(enemies_text)
     
     if not enemy_specs:
         return None
     
     enemies = build_enemy_list(enemy_specs)
+
+    surprise = None
+    if parsed.surprise:
+        surprise = parsed.surprise[0]
     
     return CombatTriggerResult(
         triggered=True,
         initiator=CombatInitiator.STRUCTURED_TAG,
         enemies=enemies,
+        surprise_round=surprise,
         context=text
     )
 
@@ -613,6 +622,40 @@ def calculate_xp_from_combat(defeated_enemies: List[Dict[str, Any]], party_size:
     return total_xp // party_size if party_size > 0 else total_xp
 
 
+def generate_and_register_loot(channel_id: str, defeated_enemies: List[Dict[str, Any]], party_size: int = 4) -> Dict[str, Any]:
+    """Generate loot from defeated enemies and register it as a claimable loot pile.
+    
+    This is the single entry point for the loot pipeline:
+    combat_trigger generates → inventory_manager stores → claim commands distribute.
+    
+    Returns:
+        The generated loot dict (gold, items, magic_items).
+    """
+    from utils.inventory_manager import create_loot_distribution
+    
+    loot = generate_loot_for_enemies(defeated_enemies, party_size)
+    
+    # Build combined item list
+    all_items = list(loot.get('items', []))
+    for magic_item in loot.get('magic_items', []):
+        if magic_item.get('identified', True):
+            all_items.append(magic_item['name'])
+        else:
+            all_items.append(f"Unidentified {magic_item.get('rarity', 'magic')} item")
+    
+    gold = loot.get('gold', 0)
+    
+    if all_items or gold > 0:
+        create_loot_distribution(
+            channel_id,
+            items=all_items,
+            currency={"gp": gold},
+            source=f"Defeated {len(defeated_enemies)} enemies"
+        )
+    
+    return loot
+
+
 # =============================================================================
 # MAIN DETECTION FUNCTION
 # =============================================================================
@@ -620,7 +663,8 @@ def calculate_xp_from_combat(defeated_enemies: List[Dict[str, Any]], party_size:
 def detect_combat_trigger(
     text: str,
     player_action: Optional[str] = None,
-    is_ai_response: bool = True
+    is_ai_response: bool = True,
+    parsed: Optional[ParsedTags] = None
 ) -> Optional[CombatTriggerResult]:
     """
     Main function to detect if combat should start.
@@ -634,12 +678,16 @@ def detect_combat_trigger(
         text: The text to analyze (AI response or narration)
         player_action: Optional player action to check for attack intent
         is_ai_response: Whether text is from AI (affects detection priority)
+        parsed: Optional pre-parsed tags (avoids re-parsing)
     
     Returns:
         CombatTriggerResult if combat should start, None otherwise
     """
+    if parsed is None:
+        parsed = parse_all_tags(text)
+
     # First, check for structured tag (highest priority)
-    result = detect_structured_combat(text)
+    result = detect_structured_combat(text, parsed=parsed)
     if result:
         return result
     

@@ -1,0 +1,25 @@
+{
+  "traps": [],
+  "hazards": [],
+  "weather": {
+    "weather_type": "extreme_cold",
+    "intensity": 1,
+    "duration_hours": -1,
+    "effects": {
+      "name": "Extreme Cold",
+      "description": "Bitter cold threatens frostbite.",
+      "con_save_dc": 10,
+      "con_save_interval": "hour",
+      "cold_damage_on_fail": "1d4",
+      "cold_resistance_immunity": true
+    }
+  },
+  "lighting": {
+    "light_level": "bright",
+    "source": "",
+    "radius": 0,
+    "x": -1,
+    "y": -1
+  },
+  "terrain_zones": []
+}

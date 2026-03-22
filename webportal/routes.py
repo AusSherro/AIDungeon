@@ -1,4 +1,8 @@
-"""Routes for the simple web portal."""
+"""Routes for the simple web portal.
+
+WARNING: No authentication. For local use only.
+TODO: Add basic auth before exposing to internet.
+"""
 
 from flask import Blueprint, render_template, abort, request, redirect, url_for, flash, jsonify
 import os
@@ -11,15 +15,11 @@ from utils.character_manager import (
 from utils.state_manager import load_state, get_context_summary
 from config import Config
 
-# Try to import D&D 5e data
-try:
-    from utils.dnd5e_data import (
-        get_class_data, get_spell_slots, get_features_at_level, get_all_features_up_to_level,
-        get_spells_for_class, get_cantrips_for_class, SPELLS, CLASSES
-    )
-    DND_DATA_AVAILABLE = True
-except ImportError:
-    DND_DATA_AVAILABLE = False
+# D&D 5e data — must be present; fails loudly on startup if missing
+from utils.dnd5e_data import (
+    get_class_data, get_spell_slots, get_features_at_level, get_all_features_up_to_level,
+    get_spells_for_class, get_cantrips_for_class, SPELLS, CLASSES
+)
 
 def list_all_characters():
     """Return a list of all stored characters with full details."""
@@ -221,10 +221,6 @@ def sync_character(char_id: str):
     if not char:
         abort(404)
     
-    if not DND_DATA_AVAILABLE:
-        flash('D&D 5e data not available for sync.', 'error')
-        return redirect(url_for('portal.character_detail', char_id=char_id))
-    
     class_name = char.get('class', 'Fighter')
     level = char.get('level', 1)
     
@@ -268,31 +264,30 @@ def manage_spells(char_id: str):
     available_spells = []
     available_cantrips = []
     
-    if DND_DATA_AVAILABLE:
-        class_name = char.get('class', 'Fighter')
-        
-        # Get spells for this class
-        for spell_name, spell_data in SPELLS.items():
-            if class_name in spell_data.get('classes', []):
-                spell_info = {
-                    'name': spell_name,
-                    'level': spell_data.get('level', 0),
-                    'school': spell_data.get('school', ''),
-                    'ritual': spell_data.get('ritual', False),
-                    'concentration': spell_data.get('concentration', False),
-                    'known': spell_name in char.get('spells_known', []),
-                    'prepared': spell_name in char.get('prepared_spells', []),
-                    'is_cantrip': spell_data.get('level', 0) == 0,
-                    'cantrip_known': spell_name in char.get('cantrips_known', [])
-                }
-                if spell_data.get('level', 0) == 0:
-                    available_cantrips.append(spell_info)
-                else:
-                    available_spells.append(spell_info)
-        
-        # Sort by level then name
-        available_spells.sort(key=lambda x: (x['level'], x['name']))
-        available_cantrips.sort(key=lambda x: x['name'])
+    class_name = char.get('class', 'Fighter')
+    
+    # Get spells for this class
+    for spell_name, spell_data in SPELLS.items():
+        if class_name in spell_data.get('classes', []):
+            spell_info = {
+                'name': spell_name,
+                'level': spell_data.get('level', 0),
+                'school': spell_data.get('school', ''),
+                'ritual': spell_data.get('ritual', False),
+                'concentration': spell_data.get('concentration', False),
+                'known': spell_name in char.get('spells_known', []),
+                'prepared': spell_name in char.get('prepared_spells', []),
+                'is_cantrip': spell_data.get('level', 0) == 0,
+                'cantrip_known': spell_name in char.get('cantrips_known', [])
+            }
+            if spell_data.get('level', 0) == 0:
+                available_cantrips.append(spell_info)
+            else:
+                available_spells.append(spell_info)
+    
+    # Sort by level then name
+    available_spells.sort(key=lambda x: (x['level'], x['name']))
+    available_cantrips.sort(key=lambda x: x['name'])
     
     return render_template('spell_management.html', 
                           char=char, 

@@ -338,7 +338,7 @@ def detect_npc_from_narration(narration: str) -> Optional[Dict[str, Any]]:
             'description': description,
             'role': detect_role(description + " " + narration),
             'race': detect_race(description + " " + narration),
-            'gender': detect_gender(description + " " + narration),
+            'gender': detect_gender(description + " " + narration, npc_name=name),
             'mood': detect_mood(narration),
         }
         
@@ -365,12 +365,20 @@ def detect_race(text: str) -> str:
     return 'human'
 
 
-def detect_gender(text: str) -> str:
-    """Detect NPC gender from text."""
+def detect_gender(text: str, npc_name: str = "") -> str:
+    """Detect NPC gender from text, scoped to sentences mentioning the NPC."""
+    if npc_name:
+        sentences = re.split(r'[.!?]', text)
+        relevant = [s for s in sentences if npc_name.lower() in s.lower()]
+        if not relevant:
+            return 'unknown'
+        text = " ".join(relevant)
+    
     text_lower = text.lower()
     
-    male_count = sum(1 for kw in GENDER_KEYWORDS['male'] if kw in text_lower)
-    female_count = sum(1 for kw in GENDER_KEYWORDS['female'] if kw in text_lower)
+    # Use word-boundary matching to avoid 'he' matching inside 'her'
+    male_count = sum(len(re.findall(rf'\b{re.escape(kw)}\b', text_lower)) for kw in GENDER_KEYWORDS['male'])
+    female_count = sum(len(re.findall(rf'\b{re.escape(kw)}\b', text_lower)) for kw in GENDER_KEYWORDS['female'])
     
     if female_count > male_count:
         return 'female'
@@ -464,7 +472,7 @@ def create_npc(channel_id: str, name: str, description: str = "", **kwargs) -> N
             description=description,
             role=kwargs.get('role', detect_role(description)),
             race=kwargs.get('race', detect_race(description)),
-            gender=kwargs.get('gender', detect_gender(description)),
+            gender=kwargs.get('gender', detect_gender(description, npc_name=name)),
             location=kwargs.get('location', ''),
             created_at=now,
             updated_at=now,
@@ -536,8 +544,10 @@ def record_npc_interaction(
     # Add facts the NPC learned
     if facts_learned:
         npc.memory.knows_facts.extend(facts_learned)
-        # Keep only last 20 facts
-        npc.memory.knows_facts = npc.memory.knows_facts[-20:]
+        # Cap memory to prevent bloat
+        from config import MAX_NPC_MEMORY_FACTS
+        if len(npc.memory.knows_facts) > MAX_NPC_MEMORY_FACTS:
+            npc.memory.knows_facts = npc.memory.knows_facts[-MAX_NPC_MEMORY_FACTS:]
     
     npc.updated_at = now
     
@@ -836,7 +846,7 @@ def buy_from_shop(
         if item['name'].lower() == item_name.lower():
             if item['quantity'] >= quantity:
                 item['quantity'] -= quantity
-                total_cost = item['price'] * quantity
+                total_cost = int(item['price'] * quantity * npc.shop.buy_rate)
                 npc.shop.gold_reserve += total_cost
                 
                 # Save changes
@@ -936,25 +946,28 @@ def assign_voice_to_npc(npc: NPC) -> Tuple[str, str]:
     Returns:
         Tuple of (voice_id, archetype)
     """
-    from utils.voice_map import get_voice_for_npc, NPC_VOICE_ARCHETYPES
-    
-    # Build description string for voice matching
-    description_parts = [npc.description, npc.race, npc.gender, npc.role]
-    if npc.personality_traits:
-        description_parts.extend(npc.personality_traits)
-    
-    full_description = " ".join(filter(None, description_parts))
-    
-    voice_id = get_voice_for_npc(full_description, npc.name)
-    
-    # Determine archetype
-    archetype = 'narrator'
-    for arch, voices in NPC_VOICE_ARCHETYPES.items():
-        if voice_id in voices:
-            archetype = arch
-            break
-    
-    return (voice_id, archetype)
+    try:
+        from utils.voice_map import get_voice_for_npc, NPC_VOICE_ARCHETYPES
+        
+        # Build description string for voice matching
+        description_parts = [npc.description, npc.race, npc.gender, npc.role]
+        if npc.personality_traits:
+            description_parts.extend(npc.personality_traits)
+        
+        full_description = " ".join(filter(None, description_parts))
+        
+        voice_id = get_voice_for_npc(full_description, npc.name)
+        
+        # Determine archetype
+        archetype = 'narrator'
+        for arch, voices in NPC_VOICE_ARCHETYPES.items():
+            if voice_id in voices:
+                archetype = arch
+                break
+        
+        return (voice_id, archetype)
+    except Exception:
+        return (None, 'narrator')
 
 
 # =============================================================================

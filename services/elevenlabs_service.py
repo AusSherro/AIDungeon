@@ -33,6 +33,15 @@ EDGE_VOICE_MAP = {
 }
 
 
+def is_available():
+    """Check if TTS is configured and available."""
+    if TTS_PROVIDER == 'disabled':
+        return False
+    if TTS_PROVIDER == 'elevenlabs':
+        return bool(ELEVENLABS_API_KEY)
+    return True  # edge TTS is always available
+
+
 def text_to_speech(text: str, voice_id: str) -> bytes:
     """
     Generate TTS audio. Uses ElevenLabs by default, falls back to Edge TTS

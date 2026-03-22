@@ -25,6 +25,8 @@ from typing import Dict, List, Optional, Any, Tuple, Set
 from enum import Enum
 from datetime import datetime
 
+from utils.tag_parser import parse_all_tags, parse_attributes, ParsedTags
+
 # Try to import encounter_manager for travel system integration
 try:
     from utils.encounter_manager import (
@@ -202,6 +204,7 @@ TRAVEL_INTENT_PATTERNS = [
 ]
 
 # AI narration patterns indicating travel/movement
+# These patterns should only match MAJOR location transitions, not minor movements
 AI_TRAVEL_NARRATION_PATTERNS = [
     # "The party travels for X hours/days"
     re.compile(
@@ -214,9 +217,10 @@ AI_TRAVEL_NARRATION_PATTERNS = [
         r'after\s+(\d+)\s+(hours?|days?)\s+(?:of\s+)?(?:travel|journey|walking|riding)',
         re.IGNORECASE
     ),
-    # "You arrive at..."
+    # "You arrive at [Proper Location Name]" - must be a proper noun location (2+ words starting with caps)
+    # This prevents matching "you reach the table" or "you arrive at the corner"
     re.compile(
-        r'\b(?:you|the\s+party|everyone)\s+(?:arrive|reach|come\s+to|enter)\s+(?:at\s+)?(?:the\s+)?([A-Z][a-zA-Z\s\']+)',
+        r'\b(?:you|the\s+party|everyone)\s+(?:finally\s+)?(?:arrive\s+(?:at|in)|reach)\s+(?:the\s+)?(?:gates?\s+of\s+)?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)\b',
         re.IGNORECASE
     ),
 ]
@@ -331,7 +335,7 @@ def add_location(
             save_world_state(channel_id, state)
             return existing
     
-    # Create new location
+    # Create new location (store key as lowercase, keep original name in Location object)
     location = Location(
         name=name,
         terrain=terrain,
@@ -342,7 +346,7 @@ def add_location(
         tags=tags or []
     )
     
-    state.locations[name] = location
+    state.locations[name.lower()] = location
     save_world_state(channel_id, state)
     return location
 
@@ -350,6 +354,11 @@ def add_location(
 def get_location(channel_id: str, name: str) -> Optional[Location]:
     """Get a location by name (case-insensitive)."""
     state = load_world_state(channel_id)
+    # Direct lookup with lowercase key
+    location = state.locations.get(name.lower())
+    if location:
+        return location
+    # Fallback: iterate for legacy data stored with original casing
     name_lower = name.lower()
     for loc_name, location in state.locations.items():
         if loc_name.lower() == name_lower:
@@ -440,26 +449,52 @@ def get_known_locations(channel_id: str) -> List[Location]:
 # TRAVEL INTENT DETECTION
 # ============================================================================
 
-def detect_structured_travel_tag(text: str) -> Optional[TravelIntent]:
+def detect_structured_travel_tag(text: str, parsed: Optional[ParsedTags] = None) -> Optional[TravelIntent]:
     """Detect [TRAVEL: destination="...", distance=X, terrain=...] tag."""
-    match = TRAVEL_TAG_PATTERN.search(text)
-    if match:
-        destination = match.group(1)
-        distance = float(match.group(2)) if match.group(2) else None
-        terrain = match.group(3) if match.group(3) else None
-        
-        return TravelIntent(
-            destination=destination,
-            distance=distance,
-            terrain=terrain,
-            source="structured_tag",
-            confidence=1.0
-        )
-    return None
+    if parsed is None:
+        parsed = parse_all_tags(text)
+
+    if not parsed.travel:
+        return None
+
+    attrs = parsed.travel[0]
+    destination = attrs.get("destination")
+    if not destination:
+        return None
+
+    distance = float(attrs["distance"]) if attrs.get("distance") else None
+    terrain = attrs.get("terrain")
+
+    return TravelIntent(
+        destination=destination,
+        distance=distance,
+        terrain=terrain,
+        source="structured_tag",
+        confidence=1.0
+    )
 
 
-def detect_natural_language_travel(text: str) -> Optional[TravelIntent]:
-    """Detect travel intent from natural language like 'we head to Phandalin'."""
+def detect_natural_language_travel(text: str, known_locations: Optional[List[str]] = None) -> Optional[TravelIntent]:
+    """Detect travel intent from natural language like 'we head to Phandalin'.
+    
+    Checks known locations first for high-confidence matches, then falls back
+    to capitalized proper nouns only.
+    """
+    # First, check for travel to known locations (high confidence)
+    if known_locations:
+        text_lower = text.lower()
+        for loc in known_locations:
+            travel_verbs = r'(?:travel|head|go|journey|walk|march|ride|trek|venture|set\s+out|depart|leave|continue)'
+            direction = r'(?:to(?:ward)?|towards?|for)'
+            pattern = rf'\b{travel_verbs}\s+{direction}\s+(?:the\s+)?{re.escape(loc.lower())}\b'
+            if re.search(pattern, text_lower):
+                return TravelIntent(
+                    destination=loc,
+                    source="natural_language",
+                    confidence=0.9
+                )
+    
+    # Fall back to regex patterns matching capitalized proper nouns
     for pattern in TRAVEL_INTENT_PATTERNS:
         match = pattern.search(text)
         if match:
@@ -470,7 +505,12 @@ def detect_natural_language_travel(text: str) -> Optional[TravelIntent]:
             # Skip if destination is too short or generic
             if len(destination) < 3:
                 continue
-            if destination.lower() in ["the", "a", "an", "it", "there"]:
+            if destination.lower() in ["the", "a", "an", "it", "there", "madness", "battle",
+                                        "war", "death", "safety", "help", "rest", "sleep"]:
+                continue
+            
+            # Only accept capitalized proper nouns (at least one capitalized word)
+            if not re.search(r'[A-Z][a-z]', destination):
                 continue
             
             return TravelIntent(
@@ -481,40 +521,53 @@ def detect_natural_language_travel(text: str) -> Optional[TravelIntent]:
     return None
 
 
-def detect_arrival_tag(text: str) -> Optional[str]:
+def detect_arrival_tag(text: str, parsed: Optional[ParsedTags] = None) -> Optional[str]:
     """Detect [ARRIVAL: "Location"] tag indicating party has arrived."""
-    match = ARRIVAL_TAG_PATTERN.search(text)
-    if match:
-        return match.group(1)
+    if parsed is None:
+        parsed = parse_all_tags(text)
+    if parsed.arrivals:
+        return parsed.arrivals[0]
     return None
 
 
-def detect_location_discovered_tag(text: str) -> Optional[LocationDiscovery]:
+def detect_location_discovered_tag(text: str, parsed: Optional[ParsedTags] = None) -> Optional[LocationDiscovery]:
     """Detect [LOCATION_DISCOVERED: name="...", terrain=..., type=..., poi=...] tag."""
-    match = LOCATION_DISCOVERED_TAG_PATTERN.search(text)
-    if match:
-        name = match.group(1)
-        terrain = match.group(2) or "wilderness"
-        loc_type = match.group(3) or "unknown"
-        is_poi = match.group(4) and match.group(4).lower() == "true"
-        
-        return LocationDiscovery(
-            name=name,
-            terrain=terrain,
-            location_type=loc_type,
-            is_poi=is_poi
-        )
-    return None
+    if parsed is None:
+        parsed = parse_all_tags(text)
+    if not parsed.discoveries:
+        return None
+
+    attrs = parsed.discoveries[0]
+    name = attrs.get("name")
+    if not name:
+        return None
+
+    terrain = attrs.get("terrain", "wilderness")
+    loc_type = attrs.get("type", "unknown")
+    is_poi = attrs.get("poi", "false").lower() == "true"
+
+    return LocationDiscovery(
+        name=name,
+        terrain=terrain,
+        location_type=loc_type,
+        is_poi=is_poi
+    )
 
 
-def detect_distance_revealed_tag(text: str) -> Optional[Tuple[str, str, float]]:
+def detect_distance_revealed_tag(text: str, parsed: Optional[ParsedTags] = None) -> Optional[Tuple[str, str, float]]:
     """Detect [DISTANCE_REVEALED: from="A" to="B" miles=X] tag."""
-    match = DISTANCE_REVEALED_TAG_PATTERN.search(text)
-    if match:
-        from_loc = match.group(1)
-        to_loc = match.group(2)
-        miles = float(match.group(3))
-        return (from_loc, to_loc, miles)
+    if parsed is None:
+        parsed = parse_all_tags(text)
+    if not parsed.distances:
+        return None
+
+    attrs = parsed.distances[0]
+    from_loc = attrs.get("from")
+    to_loc = attrs.get("to")
+    miles = attrs.get("miles")
+
+    if from_loc and to_loc and miles:
+        return (from_loc, to_loc, float(miles))
     return None
 
 
@@ -547,26 +600,34 @@ def detect_ai_travel_narration(text: str) -> Optional[Dict[str, Any]]:
 def detect_travel_intent(
     player_action: str,
     ai_narration: Optional[str] = None,
-    channel_id: Optional[str] = None
+    channel_id: Optional[str] = None,
+    parsed: Optional[ParsedTags] = None
 ) -> Optional[TravelIntent]:
     """
     Detect travel intent from player action or AI narration.
     
     Returns TravelIntent if travel should be initiated.
     """
-    # First check for structured tag in player action
+    # First check for structured tag in AI narration (pre-parsed)
+    if parsed and parsed.travel:
+        intent = detect_structured_travel_tag(ai_narration or "", parsed=parsed)
+        if intent:
+            return intent
+
+    # Check for structured tag in player action (separate parse)
     intent = detect_structured_travel_tag(player_action)
     if intent:
         return intent
     
-    # Check for structured tag in AI narration
-    if ai_narration:
+    # Check for structured tag in AI narration (if not already parsed)
+    if ai_narration and not parsed:
         intent = detect_structured_travel_tag(ai_narration)
         if intent:
             return intent
     
     # Check for natural language in player action
-    intent = detect_natural_language_travel(player_action)
+    known_locs = list(load_world_state(channel_id).locations.keys()) if channel_id else None
+    intent = detect_natural_language_travel(player_action, known_locations=known_locs)
     if intent:
         # Try to get distance from world map if available
         if channel_id:
@@ -639,44 +700,56 @@ def process_narration_for_travel(
         "distances_revealed": [],
         "travel_progress": None
     }
+
+    # Pre-parse tags once for the AI narration
+    parsed = parse_all_tags(ai_narration)
     
     # Check for travel intent
-    travel_intent = detect_travel_intent(player_action, ai_narration, channel_id)
+    travel_intent = detect_travel_intent(player_action, ai_narration, channel_id, parsed=parsed)
     if travel_intent:
         result["travel_started"] = travel_intent
     
     # Check for arrival tag
-    arrival = detect_arrival_tag(ai_narration)
+    arrival = detect_arrival_tag(ai_narration, parsed=parsed)
     if arrival:
         result["arrival"] = arrival
-        # Update current location
         set_current_location(channel_id, arrival)
-        # Add to world map if not exists
         add_location(channel_id, arrival, status="visited")
     
-    # Check for discovered locations
-    # Look for multiple discoveries
-    for match in LOCATION_DISCOVERED_TAG_PATTERN.finditer(ai_narration):
-        discovery = detect_location_discovered_tag(match.group(0))
-        if discovery:
-            result["locations_discovered"].append(discovery)
-            # Add to world map
-            add_location(
-                channel_id,
-                discovery.name,
-                terrain=discovery.terrain,
-                location_type=discovery.location_type,
-                is_poi=discovery.is_poi,
-                status="heard_of"
-            )
+    # Check for discovered locations — iterate all discoveries from parsed tags
+    for disc_attrs in parsed.discoveries:
+        name = disc_attrs.get("name")
+        if not name:
+            continue
+        terrain = disc_attrs.get("terrain", "wilderness")
+        loc_type = disc_attrs.get("type", "unknown")
+        is_poi = disc_attrs.get("poi", "false").lower() == "true"
+
+        discovery = LocationDiscovery(
+            name=name,
+            terrain=terrain,
+            location_type=loc_type,
+            is_poi=is_poi
+        )
+        result["locations_discovered"].append(discovery)
+        add_location(
+            channel_id,
+            discovery.name,
+            terrain=discovery.terrain,
+            location_type=discovery.location_type,
+            is_poi=discovery.is_poi,
+            status="heard_of"
+        )
     
     # Check for distance revelations
-    for match in DISTANCE_REVEALED_TAG_PATTERN.finditer(ai_narration):
-        distance_info = detect_distance_revealed_tag(match.group(0))
-        if distance_info:
+    for dist_attrs in parsed.distances:
+        from_loc = dist_attrs.get("from")
+        to_loc = dist_attrs.get("to")
+        miles = dist_attrs.get("miles")
+        if from_loc and to_loc and miles:
+            distance_info = (from_loc, to_loc, float(miles))
             result["distances_revealed"].append(distance_info)
-            # Update world map
-            connect_locations(channel_id, distance_info[0], distance_info[1], distance_info[2])
+            connect_locations(channel_id, from_loc, to_loc, float(miles))
     
     # Check for AI travel narration (time passing)
     travel_narration = detect_ai_travel_narration(ai_narration)
@@ -849,7 +922,7 @@ def fast_travel(channel_id: str, destination: str) -> Dict[str, Any]:
     current = state.current_location
     
     # Get distance
-    dest_loc = state.locations.get(destination)
+    dest_loc = state.locations.get(destination.lower()) or state.locations.get(destination)
     distance = dest_loc.connections.get(current) if dest_loc else None
     
     if not distance:
@@ -902,7 +975,7 @@ def get_world_context_for_ai(channel_id: str) -> str:
     ]
     
     # Add current location details
-    current_loc = state.locations.get(state.current_location)
+    current_loc = state.locations.get(state.current_location.lower()) or state.locations.get(state.current_location)
     if current_loc:
         if current_loc.description:
             lines.append(f"*{current_loc.description}*")
@@ -913,7 +986,7 @@ def get_world_context_for_ai(channel_id: str) -> str:
         lines.append("")
         lines.append("**Known Nearby Locations:**")
         for dest, distance in sorted(current_loc.connections.items(), key=lambda x: x[1]):
-            dest_loc = state.locations.get(dest)
+            dest_loc = state.locations.get(dest.lower()) or state.locations.get(dest)
             terrain_info = f" ({dest_loc.terrain})" if dest_loc else ""
             lines.append(f"  • {dest}: {distance:.1f} miles{terrain_info}")
     

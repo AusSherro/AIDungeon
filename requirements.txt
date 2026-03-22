@@ -12,3 +12,6 @@ requests>=2.31.0
 
 # TTS
 edge-tts>=6.1.0  # Free Microsoft TTS fallback
+
+# Testing
+pytest>=7.0.0

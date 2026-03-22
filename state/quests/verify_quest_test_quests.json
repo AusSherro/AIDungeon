@@ -1,0 +1,38 @@
+[
+  {
+    "id": "quest_1_20260322210532",
+    "name": "Test Quest",
+    "description": "Test",
+    "status": "completed",
+    "quest_type": "main",
+    "difficulty": "medium",
+    "giver_npc": "",
+    "location": "",
+    "objectives": [
+      {
+        "id": "obj_1",
+        "description": "Test",
+        "status": "complete",
+        "progress": 1,
+        "required": 1,
+        "is_optional": false,
+        "is_hidden": false,
+        "completion_text": ""
+      }
+    ],
+    "rewards": {
+      "xp": 100,
+      "gold": 50,
+      "items": [
+        "Sword"
+      ],
+      "reputation": {},
+      "special": ""
+    },
+    "deadline": "",
+    "notes": [],
+    "created_at": "2026-03-22T21:05:32.635855",
+    "completed_at": "2026-03-22T21:05:32.642862",
+    "tags": []
+  }
+]

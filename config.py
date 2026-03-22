@@ -25,9 +25,31 @@ class Config:
     COMMAND_PREFIX = '!'
     MAX_MESSAGE_LENGTH = 2000
     
-    # Game Settings
+    # === Game Settings ===
+    MAX_PROMPT_HISTORY = 20          # Rolling window of conversation exchanges
+    DEFAULT_DIFFICULTY = "normal"
     DEFAULT_VOICE = 'Narrator'
+    
+    # === Combat Settings ===
+    COMBAT_TURN_TIMEOUT = 90         # Seconds before auto-advance
+    COMBAT_TURN_WARNING = 30         # Seconds before timeout to send warning
     MAX_COMBAT_ROUNDS = 100
+
+    # === Session Settings ===
+    AUTO_SAVE_INTERVAL = 300         # Seconds between auto-saves
+    INACTIVITY_TIMEOUT = 1800        # Seconds before session auto-pause
+    SKILL_CHECK_TIMEOUT = 60         # Seconds to respond to skill check
+
+    # === AI Settings ===
+    AI_MODEL = "gpt-4o"
+    AI_MAX_TOKENS = 500
+    AI_TEMPERATURE = 0.9
+
+    # === TTS Settings ===
+    TTS_ENABLED = os.environ.get("TTS_ENABLED", "true").lower() == "true"
+
+    # === NPC Settings ===
+    MAX_NPC_MEMORY_FACTS = 50        # Cap on NPC knows_facts list
     
     @classmethod
     def validate(cls):

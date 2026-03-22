@@ -1,10 +1,31 @@
 import os
 import re
+import logging
+import openai
 from openai import OpenAI
 from dotenv import load_dotenv
+from config import Config
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+
+def _handle_openai_error(e: Exception, operation: str = "API call") -> str:
+    """Return a themed user-friendly error message for OpenAI exceptions."""
+    if isinstance(e, openai.APIConnectionError):
+        logger.error(f"OpenAI connection failed during {operation}: {e}")
+        return "The mystical energies are disrupted... (Connection error — try again)"
+    elif isinstance(e, openai.RateLimitError):
+        logger.warning(f"OpenAI rate limit during {operation}: {e}")
+        return "The arcane forces need a moment to recharge... (Rate limited — wait a moment)"
+    elif isinstance(e, openai.APIStatusError):
+        logger.error(f"OpenAI API error {e.status_code} during {operation}: {e}")
+        return "The cosmic threads are tangled... (API error)"
+    else:
+        logger.error(f"Unexpected error during {operation}: {e}", exc_info=True)
+        return "The mystical energies are disrupted... please try again."
 
 # Pattern to detect skill check requests from the AI
 SKILL_CHECK_PATTERN = re.compile(
@@ -136,23 +157,29 @@ def get_dm_response(user_input, state, player_id=None, system_prompt=None):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=Config.AI_MODEL,
             messages=[{"role": "system", "content": system_prompt or DEFAULT_SYSTEM_PROMPT}] + messages,
-            max_tokens=500,
-            temperature=0.9
+            max_tokens=Config.AI_MAX_TOKENS,
+            temperature=Config.AI_TEMPERATURE,
+            timeout=30
         )
         reply = response.choices[0].message.content
+    except (openai.APIConnectionError, openai.RateLimitError, openai.APIStatusError) as e:
+        reply = _handle_openai_error(e, "get_dm_response")
     except Exception as e:
-        print(f"OpenAI API Error: {e}")
-        reply = "The mystical energies are disrupted... please try again."
+        reply = _handle_openai_error(e, "get_dm_response")
     
-    # Update prompt history (just the recent conversation, summary is separate)
+    # Update prompt history — preserve first 2 messages (campaign setup) + last N
     history = state.get('prompt_history', [])
     history.append({"role": "user", "content": user_input})
     history.append({"role": "assistant", "content": reply})
-    # Keep rolling window of 10 recent exchanges
-    if len(history) > 10:
-        state['prompt_history'] = history[-10:]
+    max_history = Config.MAX_PROMPT_HISTORY
+    if len(history) > max_history:
+        # Keep first 2 messages (campaign context) + most recent entries
+        keep_start = min(2, len(history))
+        head = history[:keep_start]
+        tail = history[-(max_history - keep_start):]
+        state['prompt_history'] = head + tail
     else:
         state['prompt_history'] = history
     
@@ -216,13 +243,14 @@ Make it vivid, atmospheric, and end with something that invites player action.""
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=Config.AI_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_input}
             ],
             max_tokens=600,
-            temperature=0.9
+            temperature=Config.AI_TEMPERATURE,
+            timeout=30
         )
         raw_response = response.choices[0].message.content
         
@@ -243,8 +271,17 @@ Make it vivid, atmospheric, and end with something that invites player action.""
             "plot_hook": "Adventure awaits...",
             "narration": raw_response if 'raw_response' in dir() else "You stand at the threshold of adventure. The path ahead is shrouded in mystery. What do you do?"
         }
+    except (openai.APIConnectionError, openai.RateLimitError, openai.APIStatusError) as e:
+        _handle_openai_error(e, "generate_campaign")
+        data = {
+            "campaign_title": "The Adventure Begins",
+            "realm": "The Realm", 
+            "location": "Starting Point",
+            "plot_hook": "Adventure awaits...",
+            "narration": "You stand at the threshold of adventure. The path ahead is shrouded in mystery. What do you do?"
+        }
     except Exception as e:
-        print(f"OpenAI API Error: {e}")
+        _handle_openai_error(e, "generate_campaign")
         data = {
             "campaign_title": "The Adventure Begins",
             "realm": "The Realm", 
@@ -287,14 +324,18 @@ def summarize_history(state, max_entries=10):
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=Config.AI_MODEL,
             messages=messages,
             max_tokens=150,
             temperature=0.7,
+            timeout=30
         )
         return response.choices[0].message.content
+    except (openai.APIConnectionError, openai.RateLimitError, openai.APIStatusError) as e:
+        _handle_openai_error(e, "summarize_history")
+        return "Previously on your adventure..."
     except Exception as e:
-        print(f"OpenAI Recap Error: {e}")
+        _handle_openai_error(e, "summarize_history")
         return "Previously on your adventure..."
 
 
@@ -346,14 +387,18 @@ Return ONLY the updated summary text, no other formatting."""
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=Config.AI_MODEL,
             messages=messages,
             max_tokens=400,
             temperature=0.7,
+            timeout=30
         )
         return response.choices[0].message.content
+    except (openai.APIConnectionError, openai.RateLimitError, openai.APIStatusError) as e:
+        _handle_openai_error(e, "generate_campaign_summary")
+        return state.get("campaign_summary", "")
     except Exception as e:
-        print(f"OpenAI Summary Error: {e}")
+        _handle_openai_error(e, "generate_campaign_summary")
         return state.get("campaign_summary", "")
 
 
@@ -379,13 +424,14 @@ Return empty arrays if nothing notable found."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=Config.AI_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": recent_response}
             ],
             max_tokens=300,
             temperature=0.3,
+            timeout=30
         )
         raw = response.choices[0].message.content
         
@@ -396,8 +442,11 @@ Return empty arrays if nothing notable found."""
             raw = raw.split("```")[1].split("```")[0]
         
         return _json.loads(raw.strip())
+    except (openai.APIConnectionError, openai.RateLimitError, openai.APIStatusError) as e:
+        _handle_openai_error(e, "extract_npcs_and_quests")
+        return {"npcs": [], "quests": []}
     except Exception as e:
-        print(f"NPC/Quest extraction error: {e}")
+        logger.error(f"NPC/Quest extraction error: {e}")
         return {"npcs": [], "quests": []}
 
 
@@ -459,17 +508,21 @@ Keep it concise but impactful."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=Config.AI_MODEL,
             messages=[
                 {"role": "system", "content": "You are a dramatic D&D Dungeon Master narrating combat. Keep narrations vivid but brief (2-3 sentences). Use [Voice: CharacterName] tags for creature sounds."},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=200,
             temperature=0.8,
+            timeout=30
         )
         return response.choices[0].message.content
+    except (openai.APIConnectionError, openai.RateLimitError, openai.APIStatusError) as e:
+        _handle_openai_error(e, "narrate_enemy_action")
+        return _generate_fallback_narration(enemy_turn_result)
     except Exception as e:
-        print(f"Enemy narration error: {e}")
+        logger.error(f"Enemy narration error: {e}")
         # Fallback to simple narration
         return _generate_fallback_narration(enemy_turn_result)
 
@@ -535,17 +588,21 @@ Keep it brief but impactful."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=Config.AI_MODEL,
             messages=[
                 {"role": "system", "content": "You are a dramatic D&D Dungeon Master narrating legendary actions. These should feel powerful and sudden. Keep it to 1-2 sentences."},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=100,
             temperature=0.8,
+            timeout=30
         )
         return response.choices[0].message.content
+    except (openai.APIConnectionError, openai.RateLimitError, openai.APIStatusError) as e:
+        _handle_openai_error(e, "narrate_legendary_action")
+        return f"[Voice: {enemy_name}] {enemy_name} uses {action_name}! {action_desc}"
     except Exception as e:
-        print(f"Legendary action narration error: {e}")
+        logger.error(f"Legendary action narration error: {e}")
         return f"[Voice: {enemy_name}] {enemy_name} uses {action_name}! {action_desc}"
 
 
@@ -575,17 +632,21 @@ Keep it atmospheric but brief."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=Config.AI_MODEL,
             messages=[
                 {"role": "system", "content": "You are a D&D Dungeon Master narrating lair actions. These are environmental effects that feel like the dungeon itself is alive and hostile. Keep to 1-2 dramatic sentences."},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=100,
             temperature=0.8,
+            timeout=30
         )
         return response.choices[0].message.content
+    except (openai.APIConnectionError, openai.RateLimitError, openai.APIStatusError) as e:
+        _handle_openai_error(e, "narrate_lair_action")
+        return f"[Voice: Narrator] {description}"
     except Exception as e:
-        print(f"Lair action narration error: {e}")
+        logger.error(f"Lair action narration error: {e}")
         return f"[Voice: Narrator] {description}"
 
 
@@ -651,17 +712,24 @@ Use [Voice: Narrator] or [Voice: {player_name}] tags as appropriate."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=Config.AI_MODEL,
             messages=[
                 {"role": "system", "content": "You are a D&D Dungeon Master narrating skill check outcomes. Be dramatic but concise. Describe specific consequences of success or failure. Never ask for more rolls in your narration."},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=150,
             temperature=0.8,
+            timeout=30
         )
         return response.choices[0].message.content
+    except (openai.APIConnectionError, openai.RateLimitError, openai.APIStatusError) as e:
+        _handle_openai_error(e, "narrate_skill_check_outcome")
+        if success:
+            return f"[Voice: Narrator] {player_name} succeeds at the {skill_name} check!"
+        else:
+            return f"[Voice: Narrator] {player_name} fails the {skill_name} check."
     except Exception as e:
-        print(f"Skill check narration error: {e}")
+        logger.error(f"Skill check narration error: {e}")
         # Fallback narration
         if success:
             return f"[Voice: Narrator] {player_name} succeeds at the {skill_name} check!"
@@ -713,17 +781,24 @@ Use [Voice: Narrator] tag."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=Config.AI_MODEL,
             messages=[
                 {"role": "system", "content": "You are a D&D Dungeon Master narrating group skill check outcomes. Describe how the party's combined efforts led to success or failure. Be dramatic but concise."},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=150,
             temperature=0.8,
+            timeout=30
         )
         return response.choices[0].message.content
+    except (openai.APIConnectionError, openai.RateLimitError, openai.APIStatusError) as e:
+        _handle_openai_error(e, "narrate_group_check_outcome")
+        if group_success:
+            return f"[Voice: Narrator] Working together, the party succeeds at the {skill_name} check!"
+        else:
+            return f"[Voice: Narrator] Despite their efforts, the party fails the {skill_name} check."
     except Exception as e:
-        print(f"Group check narration error: {e}")
+        logger.error(f"Group check narration error: {e}")
         if group_success:
             return f"[Voice: Narrator] Working together, the party succeeds at the {skill_name} check!"
         else:
@@ -758,15 +833,19 @@ Do not mention the passive score or DC. Use [Voice: Narrator] tag."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=Config.AI_MODEL,
             messages=[
                 {"role": "system", "content": "You are a D&D Dungeon Master revealing information that a perceptive character notices. Be subtle and immersive. Don't break immersion by mentioning game mechanics."},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=100,
             temperature=0.7,
+            timeout=30
         )
         return response.choices[0].message.content
+    except (openai.APIConnectionError, openai.RateLimitError, openai.APIStatusError) as e:
+        _handle_openai_error(e, "narrate_passive_notice")
+        return f"[Voice: Narrator] {player_name} notices {what_noticed}."
     except Exception as e:
-        print(f"Passive notice narration error: {e}")
+        logger.error(f"Passive notice narration error: {e}")
         return f"[Voice: Narrator] {player_name} notices {what_noticed}."

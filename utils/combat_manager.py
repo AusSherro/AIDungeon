@@ -3,7 +3,7 @@ import json
 import random
 from threading import Lock
 from utils.character_manager import load_character
-from utils.dice_roller import roll_dice
+from utils.dice_roller import roll_dice, parse_dice
 
 # Try to import monster data
 try:
@@ -39,7 +39,7 @@ def _expand_enemy(enemy):
             dex_mod = (monster_data['stats']['DEX'] - 10) // 2
             enemy_data = {
                 'type': 'enemy',
-                'id': None,
+                'id': str(f"enemy_{name}_{i}"),
                 'name': display_name,
                 'monster_type': name,
                 'hp': monster_data['hp'],
@@ -72,7 +72,7 @@ def _expand_enemy(enemy):
             # Use provided stats
             enemy_data = {
                 'type': 'enemy',
-                'id': None,
+                'id': str(f"enemy_{name}_{i}"),
                 'name': display_name,
                 'hp': enemy['hp'],
                 'max_hp': enemy['hp'],
@@ -128,7 +128,7 @@ def start_combat(channel_id, players, enemies):
             init_bonus = 0
         combatants.append({
             'type': 'player', 
-            'id': user_id, 
+            'id': str(user_id), 
             'name': name, 
             'hp': hp,
             'max_hp': max_hp,
@@ -159,7 +159,7 @@ def roll_initiative(channel_id):
         bonus = c.get('init_bonus', 0)
         c['initiative'] = roll + bonus
         c['init_roll'] = roll  # Store the raw roll for display
-    state['turn_order'] = sorted(state['combatants'], key=lambda x: x['initiative'], reverse=True)
+    state['turn_order'] = sorted(state['combatants'], key=lambda x: (x.get('initiative', 0), x.get('init_bonus', 0)), reverse=True)
     state['active'] = True
     state['current_turn'] = 0
     save_combat(channel_id, state)
@@ -173,6 +173,21 @@ def next_turn(channel_id):
     for _ in range(n):
         state['current_turn'] = (state['current_turn'] + 1) % n
         active = state['turn_order'][state['current_turn']]
+        
+        # Decrement condition durations for the combatant whose turn is starting
+        expired = []
+        for condition in active.get('conditions', []):
+            if isinstance(condition, dict) and condition.get('duration') is not None:
+                condition['duration'] -= 1
+                if condition['duration'] <= 0:
+                    expired.append(condition)
+        for condition in expired:
+            active['conditions'].remove(condition)
+            # Also remove from legacy 'status' list if present
+            cond_name = condition.get('name', '')
+            if cond_name in active.get('status', []):
+                active['status'].remove(cond_name)
+        
         if active.get('hp', 1) > 0 and 'unconscious' not in active.get('status', []) and 'dead' not in active.get('status', []):
             break
     save_combat(channel_id, state)
@@ -199,8 +214,15 @@ def attack(channel_id, attacker_id, target_name, attack_bonus, damage_dice):
     if hit:
         damage_result = roll_dice(damage_dice)[0]
         if is_crit:
-            # Critical hit - double the dice (simplified: double damage)
-            damage = damage_result * 2
+            # D&D 5e crit: roll the damage dice twice, add modifier once
+            # Parse dice to separate dice from modifier, roll dice portion again
+            try:
+                num, sides, modifier = parse_dice(damage_dice)
+                extra_dice_roll = sum(random.randint(1, sides) for _ in range(num))
+                damage = damage_result + extra_dice_roll - modifier  # Remove double-counted modifier
+            except (ValueError, TypeError):
+                # Fallback: just double the roll if we can't parse
+                damage = damage_result * 2
         else:
             damage = damage_result
         target['hp'] = max(0, target.get('hp', 0) - damage)
@@ -269,15 +291,44 @@ def apply_aoe_damage(channel_id, targets, damage):
     return state
 
 
-def apply_status(channel_id, target_name, status):
-    """Placeholder for applying a status condition to a target."""
+def apply_status(channel_id, target_name, status, duration=None):
+    """Apply a status condition to a target.
+    
+    Args:
+        channel_id: The channel ID
+        target_name: Name of the target combatant
+        status: Condition name (string) or dict with {name, duration}
+        duration: Optional duration in rounds (overrides dict duration)
+    """
     state = load_combat(channel_id)
     if not state or not state.get('active'):
         return None
     target = next((c for c in state['combatants'] if c['name'].lower() == target_name.lower()), None)
     if not target:
         return None
-    target.setdefault('status', []).append(status)
+    
+    # Normalize to dict format with optional duration
+    if isinstance(status, str):
+        condition = {'name': status, 'duration': duration}
+    elif isinstance(status, dict):
+        condition = status
+        if duration is not None:
+            condition['duration'] = duration
+    else:
+        return None
+    
+    cond_name = condition.get('name', str(status))
+    
+    # Add to legacy 'status' list for backward compatibility
+    if cond_name not in target.get('status', []):
+        target.setdefault('status', []).append(cond_name)
+    
+    # Add to structured 'conditions' list with duration tracking
+    target.setdefault('conditions', [])
+    # Don't add duplicate conditions
+    if not any(c.get('name') == cond_name for c in target['conditions']):
+        target['conditions'].append(condition)
+    
     save_combat(channel_id, state)
     return state
 
@@ -466,7 +517,7 @@ def add_combatant_mid_combat(channel_id, combatant_data, initiative_roll=None):
     
     new_combatant = {
         'type': combatant_data.get('type', 'enemy'),
-        'id': combatant_data.get('id'),
+        'id': str(combatant_data.get('id') or f"mid_{combatant_data['name']}"),
         'name': combatant_data['name'],
         'hp': combatant_data['hp'],
         'max_hp': combatant_data.get('max_hp', combatant_data['hp']),
@@ -482,7 +533,7 @@ def add_combatant_mid_combat(channel_id, combatant_data, initiative_roll=None):
     # Re-sort turn order
     state['turn_order'] = sorted(
         [c for c in state['combatants'] if c.get('hp', 1) > 0],
-        key=lambda x: x['initiative'],
+        key=lambda x: (x.get('initiative', 0), x.get('init_bonus', 0)),
         reverse=True
     )
     
@@ -524,7 +575,7 @@ def delay_turn(channel_id, combatant_name, new_initiative):
     # Re-sort turn order
     state['turn_order'] = sorted(
         [c for c in state['combatants'] if c.get('hp', 1) > 0 and 'dead' not in c.get('status', [])],
-        key=lambda x: x['initiative'],
+        key=lambda x: (x.get('initiative', 0), x.get('init_bonus', 0)),
         reverse=True
     )
     

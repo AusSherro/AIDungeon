@@ -172,15 +172,8 @@ CR_TO_XP = {
     26: 90000, 27: 105000, 28: 120000, 29: 135000, 30: 155000,
 }
 
-# Encounter multipliers based on number of monsters (DMG pg. 82)
-ENCOUNTER_MULTIPLIERS = {
-    1: 1.0,
-    2: 1.5,
-    (3, 6): 2.0,
-    (7, 10): 2.5,
-    (11, 14): 3.0,
-    15: 4.0,  # 15+
-}
+# Encounter multipliers are implemented in get_encounter_multiplier() as an if/elif chain
+# per DMG pg. 82. See that function for the actual multiplier logic.
 
 # Travel speeds
 TRAVEL_SPEEDS = {
@@ -841,7 +834,12 @@ def advance_travel(
     # Check for random encounter
     encounter = None
     is_stealthy = pace_data["stealth_possible"]
-    is_night = state.hours_traveled_today > 12  # Simplified day/night
+    try:
+        from utils.world_generator import get_time_state
+        time_state = get_time_state(channel_id)
+        is_night = time_state.hour >= 20 or time_state.hour < 6
+    except Exception:
+        is_night = False  # Default to day if time system unavailable
     
     if roll_for_encounter(state.terrain, hours, is_night, is_stealthy):
         state.encounters_today += 1

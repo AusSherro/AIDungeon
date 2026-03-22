@@ -37,6 +37,12 @@ try:
 except ImportError:
     HAS_STATE_MANAGER = False
 
+try:
+    from config import Config
+    _CONFIG_AVAILABLE = True
+except ImportError:
+    _CONFIG_AVAILABLE = False
+
 
 # ============================================================================
 # ENUMS
@@ -127,10 +133,10 @@ class PacingHint:
 # ============================================================================
 
 # Auto-save interval in seconds
-AUTO_SAVE_INTERVAL = 300  # 5 minutes
+AUTO_SAVE_INTERVAL = Config.AUTO_SAVE_INTERVAL if _CONFIG_AVAILABLE else 300
 
 # Inactivity timeout in seconds  
-INACTIVITY_TIMEOUT = 1800  # 30 minutes
+INACTIVITY_TIMEOUT = Config.INACTIVITY_TIMEOUT if _CONFIG_AVAILABLE else 1800
 
 # Pacing phase thresholds (in minutes)
 PACING_THRESHOLDS = {

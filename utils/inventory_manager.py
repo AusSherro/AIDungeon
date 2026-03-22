@@ -6,9 +6,14 @@ Handles attunement, magic item identification, loot distribution, and encumbranc
 import json
 import os
 import random
+import tempfile
+import time
+import logging
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field, asdict
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # CONSTANTS
@@ -524,16 +529,83 @@ def format_encumbrance_status(user_id: str) -> str:
 
 
 # =============================================================================
-# LOOT DISTRIBUTION
+# LOOT DISTRIBUTION (persisted to disk)
 # =============================================================================
 
-# Store pending loot for distribution
+LOOT_DIR = os.path.join(os.path.dirname(__file__), '..', 'state', 'loot')
+os.makedirs(LOOT_DIR, exist_ok=True)
+
+# In-memory cache (loaded from disk on demand)
 _pending_loot: Dict[str, LootClaim] = {}
 
 
-def create_loot_distribution(channel_id: str, items: List[str], currency: Dict[str, int]) -> str:
+def _loot_path(channel_id: str) -> str:
+    """Get the file path for a channel's pending loot."""
+    return os.path.join(LOOT_DIR, f'{channel_id}_loot.json')
+
+
+def _save_pending_loot(channel_id: str):
+    """Persist pending loot to disk using atomic writes."""
+    loot = _pending_loot.get(channel_id)
+    path = _loot_path(channel_id)
+    
+    if not loot:
+        # Remove file if no loot
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        return
+    
+    data = {
+        'loot_id': loot.loot_id,
+        'items': loot.items,
+        'currency': loot.currency,
+        'claims': loot.claims,
+        'timestamp': loot.timestamp,
+    }
+    
+    try:
+        temp_fd, temp_path = tempfile.mkstemp(dir=LOOT_DIR, suffix='.tmp')
+        with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(temp_path, path)
+    except Exception as e:
+        logger.error(f"Failed to save loot for {channel_id}: {e}")
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+
+
+def _load_pending_loot(channel_id: str) -> Optional[LootClaim]:
+    """Load pending loot from disk into cache."""
+    if channel_id in _pending_loot:
+        return _pending_loot[channel_id]
+    
+    path = _loot_path(channel_id)
+    if not os.path.exists(path):
+        return None
+    
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        loot = LootClaim(
+            loot_id=data['loot_id'],
+            items=data.get('items', []),
+            currency=data.get('currency', {}),
+            claims=data.get('claims', {}),
+            timestamp=data.get('timestamp', 0),
+        )
+        _pending_loot[channel_id] = loot
+        return loot
+    except Exception as e:
+        logger.error(f"Failed to load loot for {channel_id}: {e}")
+        return None
+
+
+def create_loot_distribution(channel_id: str, items: List[str], currency: Dict[str, int], source: str = "") -> str:
     """Create a pending loot distribution for players to claim."""
-    import time
     import uuid
     
     loot_id = str(uuid.uuid4())[:8]
@@ -541,10 +613,11 @@ def create_loot_distribution(channel_id: str, items: List[str], currency: Dict[s
     _pending_loot[channel_id] = LootClaim(
         loot_id=loot_id,
         items=items.copy(),
-        currency=currency.copy(),
+        currency=currency if isinstance(currency, dict) else {"gp": currency},
         claims={},
         timestamp=time.time()
     )
+    _save_pending_loot(channel_id)
     
     return loot_id
 
@@ -553,10 +626,9 @@ def claim_loot_item(channel_id: str, user_id: str, item_name: str) -> Tuple[bool
     """Claim an item from pending loot."""
     from utils.character_manager import load_character, add_inventory
     
-    if channel_id not in _pending_loot:
+    loot = _load_pending_loot(channel_id)
+    if not loot:
         return False, "No pending loot to claim"
-    
-    loot = _pending_loot[channel_id]
     
     # Check if item is available
     if item_name not in loot.items:
@@ -570,6 +642,7 @@ def claim_loot_item(channel_id: str, user_id: str, item_name: str) -> Tuple[bool
     # Claim the item
     loot.items.remove(item_name)
     loot.claims.setdefault(user_id, []).append(item_name)
+    _save_pending_loot(channel_id)
     
     # Add to inventory
     add_inventory(user_id, item_name)
@@ -578,30 +651,64 @@ def claim_loot_item(channel_id: str, user_id: str, item_name: str) -> Tuple[bool
     return True, f"**{char_name}** claimed **{item_name}**!"
 
 
-def claim_loot_gold(channel_id: str, user_id: str, amount: int = None) -> Tuple[bool, str]:
-    """Claim gold from pending loot (or split evenly if no amount specified)."""
+def claim_loot_gold(channel_id: str, user_id: str, amount: int = None, party_user_ids: List[str] = None) -> Tuple[bool, str]:
+    """Claim gold from pending loot.
+    
+    If amount is None and party_user_ids provided, splits evenly among the party.
+    If amount is None and no party_user_ids, claims all for the requesting player.
+    Remainder from even splits goes to the first player.
+    """
     from utils.character_manager import load_character, save_character
     
-    if channel_id not in _pending_loot:
+    loot = _load_pending_loot(channel_id)
+    if not loot:
         return False, "No pending loot to claim"
     
-    loot = _pending_loot[channel_id]
     available_gp = loot.currency.get("gp", 0)
     
     if available_gp <= 0:
         return False, "No gold remaining in the loot"
     
+    # Even split mode: amount=None with party members
+    if amount is None and party_user_ids and len(party_user_ids) > 1:
+        per_player = available_gp // len(party_user_ids)
+        remainder = available_gp % len(party_user_ids)
+        
+        if per_player <= 0:
+            return False, f"Only {available_gp} gp — not enough to split {len(party_user_ids)} ways"
+        
+        results = []
+        for i, pid in enumerate(party_user_ids):
+            char = load_character(pid)
+            if not char:
+                continue
+            share = per_player + (remainder if i == 0 else 0)
+            char["gold"] = char.get("gold", 0) + share
+            save_character(pid, char)
+            char_name = char.get("name", "Unknown")
+            results.append(f"**{char_name}**: {share} gp")
+        
+        loot.currency["gp"] = 0
+        _save_pending_loot(channel_id)
+        
+        msg = f"💰 **Gold split ({available_gp} gp):**\n" + "\n".join(results)
+        if remainder:
+            msg += f"\n*(1 gp remainder went to first player)*"
+        return True, msg
+    
+    # Single claim mode
     char = load_character(user_id)
     if not char:
         return False, "You don't have a character registered"
     
     if amount is None:
-        amount = available_gp  # Take all
+        amount = available_gp
     
     amount = min(amount, available_gp)
     
     # Update loot
     loot.currency["gp"] = available_gp - amount
+    _save_pending_loot(channel_id)
     
     # Add to character
     char["gold"] = char.get("gold", 0) + amount
@@ -613,12 +720,12 @@ def claim_loot_gold(channel_id: str, user_id: str, amount: int = None) -> Tuple[
 
 def get_pending_loot(channel_id: str) -> Optional[LootClaim]:
     """Get pending loot for a channel."""
-    return _pending_loot.get(channel_id)
+    return _load_pending_loot(channel_id)
 
 
 def format_pending_loot(channel_id: str) -> str:
     """Format pending loot for display."""
-    loot = _pending_loot.get(channel_id)
+    loot = _load_pending_loot(channel_id)
     if not loot:
         return "No pending loot."
     
@@ -657,8 +764,13 @@ def format_pending_loot(channel_id: str) -> str:
 
 def clear_pending_loot(channel_id: str):
     """Clear pending loot after distribution."""
-    if channel_id in _pending_loot:
-        del _pending_loot[channel_id]
+    _pending_loot.pop(channel_id, None)
+    # Remove from disk
+    path = _loot_path(channel_id)
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 # =============================================================================

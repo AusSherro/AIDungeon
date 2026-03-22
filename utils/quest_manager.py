@@ -18,6 +18,8 @@ from enum import Enum
 from datetime import datetime
 import logging
 
+from utils.tag_parser import parse_all_tags, parse_attributes, ParsedTags
+
 logger = logging.getLogger(__name__)
 
 # Directory for quest data storage
@@ -809,14 +811,21 @@ def parse_quest_tag_attributes(attr_string: str) -> Dict[str, str]:
     """
     result = {}
     
-    # Match key="value" or key='value' or key=value patterns
-    # Handle quoted values first
-    quoted_pattern = r'(\w+)\s*=\s*["\']([^"\']+)["\']'
-    for match in re.finditer(quoted_pattern, attr_string):
+    # Match key="value" (double-quoted — allows apostrophes inside)
+    dq_pattern = r'(\w+)\s*=\s*"([^"]*)"'
+    for match in re.finditer(dq_pattern, attr_string):
         result[match.group(1).lower()] = match.group(2)
     
+    # Match key='value' (single-quoted — allows double quotes inside)
+    sq_pattern = r"(\w+)\s*=\s*'([^']*)'"
+    for match in re.finditer(sq_pattern, attr_string):
+        key = match.group(1).lower()
+        if key not in result:
+            result[key] = match.group(2)
+    
     # Then handle unquoted values (avoiding already-matched parts)
-    remaining = re.sub(quoted_pattern, '', attr_string)
+    remaining = re.sub(dq_pattern, '', attr_string)
+    remaining = re.sub(sq_pattern, '', remaining)
     unquoted_pattern = r'(\w+)\s*=\s*(\w+)'
     for match in re.finditer(unquoted_pattern, remaining):
         key = match.group(1).lower()
@@ -826,12 +835,15 @@ def parse_quest_tag_attributes(attr_string: str) -> Dict[str, str]:
     return result
 
 
-def detect_structured_quest_tags(narration: str) -> Dict[str, Any]:
+def detect_structured_quest_tags(narration: str, parsed: Optional[ParsedTags] = None) -> Dict[str, Any]:
     """
     Detect structured quest-related tags in AI narration.
     
     Returns dict with keys: new_quests, completions, progress, rumors, hooks, objectives, chains
     """
+    if parsed is None:
+        parsed = parse_all_tags(narration)
+
     result = {
         "new_quests": [],
         "completions": [],
@@ -843,8 +855,7 @@ def detect_structured_quest_tags(narration: str) -> Dict[str, Any]:
     }
     
     # [QUEST: name="...", type=..., difficulty=..., giver="..."]
-    for match in QUEST_TAG_PATTERN.finditer(narration):
-        attrs = parse_quest_tag_attributes(match.group(1))
+    for attrs in parsed.quests:
         if "name" in attrs:
             quest_data = {
                 "name": attrs.get("name", "Unknown Quest"),
@@ -855,32 +866,28 @@ def detect_structured_quest_tags(narration: str) -> Dict[str, Any]:
                 "location": attrs.get("location", ""),
                 "objectives": [],
             }
-            # Parse objectives if provided
             if "objectives" in attrs:
                 quest_data["objectives"] = [o.strip() for o in attrs["objectives"].split("|")]
             result["new_quests"].append(quest_data)
     
     # [QUEST_COMPLETE: "Quest Name"]
-    for match in QUEST_COMPLETE_TAG_PATTERN.finditer(narration):
-        result["completions"].append(match.group(1).strip())
+    for quest_name in parsed.quest_completions:
+        result["completions"].append(quest_name.strip())
     
     # [QUEST_PROGRESS: "Quest Name", objective=1]
-    for match in QUEST_PROGRESS_TAG_PATTERN.finditer(narration):
-        attrs = parse_quest_tag_attributes(match.group(1))
-        quest_ref = match.group(1).split(",")[0].strip().strip("\"'")
+    for progress in parsed.quest_progress:
         result["progress"].append({
-            "quest": quest_ref,
-            "objective": attrs.get("objective", "1"),
-            "amount": int(attrs.get("amount", "1"))
+            "quest": progress["quest"],
+            "objective": progress.get("objective", "1"),
+            "amount": int(progress.get("amount", "1"))
         })
     
     # [RUMOR: "Strange lights near the cemetery"]
-    for match in RUMOR_TAG_PATTERN.finditer(narration):
-        result["rumors"].append(match.group(1).strip())
+    for rumor_text in parsed.rumors:
+        result["rumors"].append(rumor_text.strip())
     
     # [QUEST_HOOK: name="...", description="..."]
-    for match in QUEST_HOOK_TAG_PATTERN.finditer(narration):
-        attrs = parse_quest_tag_attributes(match.group(1))
+    for attrs in parsed.quest_hooks:
         if attrs:
             result["hooks"].append({
                 "name": attrs.get("name", "Unknown"),
@@ -890,16 +897,15 @@ def detect_structured_quest_tags(narration: str) -> Dict[str, Any]:
             })
     
     # [OBJECTIVE: "New objective text"]
-    for match in OBJECTIVE_TAG_PATTERN.finditer(narration):
-        result["objectives"].append(match.group(1).strip())
+    for obj_text in parsed.objectives:
+        result["objectives"].append(obj_text.strip())
     
     # [QUEST_CHAIN: parent="Main Quest", child="Side Quest"]
-    for match in QUEST_CHAIN_TAG_PATTERN.finditer(narration):
-        attrs = parse_quest_tag_attributes(match.group(1))
-        if "parent" in attrs and "child" in attrs:
+    for chain in parsed.quest_chains:
+        if "parent" in chain and "child" in chain:
             result["chains"].append({
-                "parent": attrs["parent"],
-                "child": attrs["child"]
+                "parent": chain["parent"],
+                "child": chain["child"]
             })
     
     return result
@@ -1039,6 +1045,11 @@ def convert_rumor_to_quest(
             break
     
     if not rumor:
+        return None
+    
+    # Prevent duplicate quests
+    existing = get_quest_by_name(channel_id, quest_name)
+    if existing:
         return None
     
     # Create the quest

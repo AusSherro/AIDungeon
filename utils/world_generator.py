@@ -16,6 +16,8 @@ from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from utils.tag_parser import parse_all_tags, ParsedTags
+
 
 # ============================================================================
 # DATA CLASSES
@@ -385,23 +387,86 @@ LIGHTING_KEYWORDS = {
     "magical_darkness": ["magical darkness", "supernatural darkness", "unnatural dark"],
 }
 
-# Natural language location detection
+# Natural language location detection - REQUIRES movement verbs to trigger
+# These patterns require the party to actually be MOVING to the location
+LOCATION_ENTRY_PATTERNS = {
+    "cave": [
+        r"(?:enter|step into|arrive at|reach|go into|walk into|head into|move into)\s+(?:the\s+)?(?:dark\s+)?cave",
+        r"(?:enter|step into|arrive at|reach)\s+(?:the\s+)?cavern",
+        r"inside\s+the\s+cave",
+        r"cave\s+entrance",
+    ],
+    "dungeon": [
+        r"(?:enter|step into|descend into|arrive at|reach)\s+(?:the\s+)?(?:ancient\s+)?dungeon",
+        r"(?:enter|step into)\s+(?:the\s+)?underground\s+complex",
+    ],
+    "forest": [
+        r"(?:enter|step into|walk into|arrive at|reach|travel into|head into)\s+(?:the\s+)?(?:\w+\s+)?(?:forest|woods|woodland)",
+        r"trees\s+surround\s+(?:you|the\s+party)",
+    ],
+    "swamp": [
+        r"(?:enter|step into|wade into|arrive at|reach)\s+(?:the\s+)?(?:\w+\s+)?(?:swamp|marsh|bog)",
+        r"murky\s+waters\s+surround",
+    ],
+    "tavern": [
+        r"(?:enter|step into|walk into|arrive at|push\s+(?:open|through))\s+(?:the\s+)?(?:\w+\s+)?(?:tavern|inn)",
+        r"(?:enter|step into)\s+(?:the\s+)?(?:common\s+room|bar)",
+    ],
+    "temple": [
+        r"(?:enter|step into|arrive at|reach)\s+(?:the\s+)?(?:\w+\s+)?(?:temple|shrine|sacred\s+place|holy\s+site)",
+    ],
+    "castle": [
+        r"(?:enter|approach|arrive at|reach)\s+(?:the\s+)?(?:\w+\s+)?(?:castle|fortress|keep|stronghold)",
+    ],
+    "ruins": [
+        r"(?:enter|explore|arrive at|reach|approach)\s+(?:the\s+)?(?:\w+\s+)?ruins",
+        r"(?:enter|step into)\s+(?:the\s+)?(?:crumbling|ancient)\s+(?:structure|building|ruins)",
+    ],
+    "crypt": [
+        r"(?:enter|descend into|step into|arrive at)\s+(?:the\s+)?(?:\w+\s+)?(?:crypt|tomb|burial\s+chamber|mausoleum)",
+    ],
+    "city": [
+        r"(?:enter|arrive at|reach|approach)\s+(?:the\s+)?(?:\w+\s+)?(?:city|town|village)",
+        r"(?:walk|step)\s+into\s+(?:the\s+)?(?:streets|marketplace)",
+    ],
+    "road": [
+        r"(?:set\s+out\s+on|travel\s+along|walk\s+(?:down|along)|follow)\s+(?:the\s+)?(?:\w+\s+)?(?:road|path|trail|highway)",
+    ],
+    "mountain": [
+        r"(?:climb|ascend|reach|arrive at)\s+(?:the\s+)?(?:\w+\s+)?(?:mountain|peak|mountainside)",
+        r"(?:scale|climb)\s+(?:the\s+)?cliff",
+    ],
+    "desert": [
+        r"(?:enter|step into|arrive at|reach|travel into)\s+(?:the\s+)?(?:\w+\s+)?(?:desert|wasteland)",
+        r"(?:enter|step into)\s+(?:the\s+)?sand\s+dunes",
+    ],
+    "arctic": [
+        r"(?:enter|step into|arrive at|reach|travel into)\s+(?:the\s+)?(?:\w+\s+)?(?:arctic|frozen\s+(?:waste|land)|tundra)",
+        r"(?:step\s+onto|arrive\s+at)\s+(?:the\s+)?glacier",
+    ],
+    "underwater": [
+        r"(?:descend|dive|swim)\s+(?:beneath\s+the\s+waves|underwater)",
+        r"(?:reach|arrive\s+at)\s+(?:the\s+)?ocean\s+floor",
+    ],
+}
+
+# Simple keywords for reference (used in parsing, NOT for detection)
 LOCATION_KEYWORDS = {
-    "cave": ["enter the cave", "cave entrance", "inside the cave", "cavern"],
-    "dungeon": ["dungeon", "underground complex", "ancient dungeon"],
-    "forest": ["forest", "woods", "trees surround", "woodland"],
-    "swamp": ["swamp", "marsh", "bog", "murky waters"],
+    "cave": ["cave", "cavern"],
+    "dungeon": ["dungeon", "underground complex"],
+    "forest": ["forest", "woods", "woodland"],
+    "swamp": ["swamp", "marsh", "bog"],
     "tavern": ["tavern", "inn", "bar", "common room"],
     "temple": ["temple", "shrine", "sacred place", "holy site"],
     "castle": ["castle", "fortress", "keep", "stronghold"],
-    "ruins": ["ruins", "crumbling", "ancient ruins", "ruined"],
+    "ruins": ["ruins", "ancient ruins"],
     "crypt": ["crypt", "tomb", "burial chamber", "mausoleum"],
     "city": ["city", "town", "village", "streets", "marketplace"],
     "road": ["road", "path", "trail", "highway"],
     "mountain": ["mountain", "peak", "cliff", "mountainside"],
-    "desert": ["desert", "sand dunes", "arid", "wasteland"],
-    "arctic": ["arctic", "frozen", "ice", "tundra", "glacier"],
-    "underwater": ["underwater", "beneath the waves", "ocean floor"],
+    "desert": ["desert", "sand dunes", "wasteland"],
+    "arctic": ["arctic", "frozen", "tundra", "glacier"],
+    "underwater": ["underwater", "ocean floor"],
 }
 
 # Time keywords
@@ -508,22 +573,20 @@ def set_current_location(channel_id: str, location: str):
 # DETECTION FUNCTIONS
 # ============================================================================
 
-def detect_structured_tags(text: str) -> List[EnvironmentChange]:
+def detect_structured_tags(text: str, parsed: Optional[ParsedTags] = None) -> List[EnvironmentChange]:
     """Detect structured environment tags in AI narration."""
+    if parsed is None:
+        parsed = parse_all_tags(text)
+
     changes = []
     
     # [WEATHER: rain] or [WEATHER: heavy rain, intensity 2]
-    weather_match = WEATHER_TAG_PATTERN.search(text)
-    if weather_match:
-        weather_str = weather_match.group(1).strip()
+    for weather_str in parsed.weather:
         intensity = 1
-        # Check for intensity specification
         intensity_match = re.search(r"intensity\s*(\d+)", weather_str, re.IGNORECASE)
         if intensity_match:
             intensity = int(intensity_match.group(1))
             weather_str = re.sub(r",?\s*intensity\s*\d+", "", weather_str).strip()
-        
-        # Normalize weather type
         weather_type = weather_str.lower().replace(" ", "_")
         changes.append(EnvironmentChange(
             change_type="weather",
@@ -532,16 +595,12 @@ def detect_structured_tags(text: str) -> List[EnvironmentChange]:
         ))
     
     # [LIGHTING: dim] or [LIGHTING: darkness, source: no windows]
-    lighting_match = LIGHTING_TAG_PATTERN.search(text)
-    if lighting_match:
-        lighting_str = lighting_match.group(1).strip()
+    for lighting_str in parsed.lighting:
         source = ""
-        # Check for source specification
         source_match = re.search(r"source[:\s]+([^,\]]+)", lighting_str, re.IGNORECASE)
         if source_match:
             source = source_match.group(1).strip()
             lighting_str = re.sub(r",?\s*source[:\s]+[^,\]]+", "", lighting_str).strip()
-        
         light_level = lighting_str.lower().replace(" ", "_")
         changes.append(EnvironmentChange(
             change_type="lighting",
@@ -549,11 +608,8 @@ def detect_structured_tags(text: str) -> List[EnvironmentChange]:
             details={"source": source}
         ))
     
-    # [TRAP: pit trap at entrance] or [TRAP: poison dart, DC 15, tripwire]
-    trap_match = TRAP_TAG_PATTERN.search(text)
-    if trap_match:
-        trap_str = trap_match.group(1).strip()
-        # Try to parse trap details
+    # [TRAP: pit trap at entrance]
+    for trap_str in parsed.traps:
         trap_info = parse_trap_string(trap_str)
         changes.append(EnvironmentChange(
             change_type="trap",
@@ -561,10 +617,8 @@ def detect_structured_tags(text: str) -> List[EnvironmentChange]:
             details=trap_info
         ))
     
-    # [HAZARD: lava pool, 2d6 fire] or [HAZARD: acid pit]
-    hazard_match = HAZARD_TAG_PATTERN.search(text)
-    if hazard_match:
-        hazard_str = hazard_match.group(1).strip()
+    # [HAZARD: lava pool, 2d6 fire]
+    for hazard_str in parsed.hazards:
         hazard_info = parse_hazard_string(hazard_str)
         changes.append(EnvironmentChange(
             change_type="hazard",
@@ -573,20 +627,16 @@ def detect_structured_tags(text: str) -> List[EnvironmentChange]:
         ))
     
     # [TIME: 3 hours pass] or [TIME: night]
-    time_match = TIME_TAG_PATTERN.search(text)
-    if time_match:
-        time_str = time_match.group(1).strip().lower()
-        time_info = parse_time_string(time_str)
+    for time_str in parsed.time_changes:
+        time_info = parse_time_string(time_str.lower())
         changes.append(EnvironmentChange(
             change_type="time",
             value=time_info.get("action", time_str),
             details=time_info
         ))
     
-    # [LOCATION: Dark Cave] or [LOCATION: entering the swamp]
-    location_match = LOCATION_TAG_PATTERN.search(text)
-    if location_match:
-        location_str = location_match.group(1).strip()
+    # [LOCATION: Dark Cave]
+    for location_str in parsed.locations:
         changes.append(EnvironmentChange(
             change_type="location",
             value=location_str,
@@ -594,39 +644,33 @@ def detect_structured_tags(text: str) -> List[EnvironmentChange]:
         ))
     
     # [ENVIRONMENT: dark cave, cold, dripping water]
-    env_match = ENVIRONMENT_TAG_PATTERN.search(text)
-    if env_match:
-        env_str = env_match.group(1).strip()
+    for env_str in parsed.environment:
         env_info = parse_environment_string(env_str)
         for key, value in env_info.items():
             if key == "location":
-                changes.append(EnvironmentChange(
-                    change_type="location",
-                    value=value,
-                    details={}
-                ))
+                changes.append(EnvironmentChange(change_type="location", value=value, details={}))
             elif key == "lighting":
-                changes.append(EnvironmentChange(
-                    change_type="lighting",
-                    value=value,
-                    details={}
-                ))
+                changes.append(EnvironmentChange(change_type="lighting", value=value, details={}))
             elif key == "weather":
-                changes.append(EnvironmentChange(
-                    change_type="weather",
-                    value=value,
-                    details={}
-                ))
+                changes.append(EnvironmentChange(change_type="weather", value=value, details={}))
     
     return changes
 
 
 def detect_natural_language(text: str) -> List[EnvironmentChange]:
-    """Detect environment changes from natural language narration."""
+    """Detect environment changes from natural language narration.
+    
+    Location detection is strict - requires movement verbs to avoid false positives
+    when NPCs merely mention locations in dialogue.
+    """
     changes = []
     text_lower = text.lower()
     
-    # Detect weather changes
+    # Skip detection if text appears to be inside NPC dialogue
+    # (contains quoted speech that mentions locations)
+    # We'll still detect if it's the narration mentioning location changes
+    
+    # Detect weather changes (still use keyword matching)
     for weather_type, keywords in WEATHER_KEYWORDS.items():
         for keyword in keywords:
             if keyword in text_lower:
@@ -637,7 +681,7 @@ def detect_natural_language(text: str) -> List[EnvironmentChange]:
                 ))
                 break
     
-    # Detect lighting changes
+    # Detect lighting changes (still use keyword matching)
     for light_level, keywords in LIGHTING_KEYWORDS.items():
         for keyword in keywords:
             if keyword in text_lower:
@@ -648,16 +692,21 @@ def detect_natural_language(text: str) -> List[EnvironmentChange]:
                 ))
                 break
     
-    # Detect location changes
-    for location_type, keywords in LOCATION_KEYWORDS.items():
-        for keyword in keywords:
-            if keyword in text_lower:
+    # Detect location changes - use REGEX patterns that require movement verbs
+    # This prevents false positives when NPCs just talk about places
+    for location_type, patterns in LOCATION_ENTRY_PATTERNS.items():
+        matched = False
+        for pattern in patterns:
+            if re.search(pattern, text_lower):
                 changes.append(EnvironmentChange(
                     change_type="location",
                     value=location_type,
-                    details={"detected_from": keyword}
+                    details={"detected_from": pattern}
                 ))
+                matched = True
                 break
+        if matched:
+            break  # Only detect one location change per narration
     
     # Detect time changes/advances
     for time_period, keywords in TIME_KEYWORDS.items():
@@ -802,31 +851,60 @@ def parse_hazard_string(hazard_str: str) -> Dict[str, Any]:
 def parse_time_string(time_str: str) -> Dict[str, Any]:
     """Parse time specification string."""
     result = {"raw": time_str}
+    time_lower = time_str.lower()
     
-    # Check for hour advancement
-    hours_match = re.search(r"(\d+)\s*hours?", time_str)
+    # Check for rest first (before hour matching)
+    if "long rest" in time_lower:
+        result["action"] = "advance"
+        result["hours"] = 8
+        return result
+    if "short rest" in time_lower:
+        result["action"] = "advance"
+        result["hours"] = 1
+        return result
+    
+    # Range: "4 to 5 hours" → take average
+    range_match = re.search(r"(\d+)\s*(?:to|-)\s*(\d+)\s*hours?", time_lower)
+    if range_match:
+        result["action"] = "advance"
+        result["hours"] = (int(range_match.group(1)) + int(range_match.group(2))) // 2
+        return result
+    
+    # Direct number: "3 hours", "about 3 hours"
+    hours_match = re.search(r"(\d+)\s*hours?", time_lower)
     if hours_match:
         result["action"] = "advance"
         result["hours"] = int(hours_match.group(1))
         return result
     
+    # Vague durations
+    if "few" in time_lower and "hour" in time_lower:
+        result["action"] = "advance"
+        result["hours"] = 3
+        return result
+    if "several" in time_lower and "hour" in time_lower:
+        result["action"] = "advance"
+        result["hours"] = 5
+        return result
+    if "couple" in time_lower and "hour" in time_lower:
+        result["action"] = "advance"
+        result["hours"] = 2
+        return result
+    
+    # Minutes: "30 minutes" = at least 1 hour
+    min_match = re.search(r"(\d+)\s*minutes?", time_lower)
+    if min_match:
+        result["action"] = "advance"
+        result["hours"] = max(1, int(min_match.group(1)) // 60)
+        return result
+    
     # Check for specific time periods
     time_periods = ["dawn", "morning", "midday", "afternoon", "evening", "dusk", "night"]
     for period in time_periods:
-        if period in time_str:
+        if period in time_lower:
             result["action"] = "set_period"
             result["period"] = period
             return result
-    
-    # Check for rest
-    if "long rest" in time_str:
-        result["action"] = "advance"
-        result["hours"] = 8
-        return result
-    if "short rest" in time_str:
-        result["action"] = "advance"
-        result["hours"] = 1
-        return result
     
     result["action"] = "unknown"
     return result
@@ -988,9 +1066,20 @@ def apply_environment_changes(
     return results
 
 
-def apply_location_preset(channel_id: str, location: str) -> List[str]:
-    """Apply environment preset for a location type."""
-    from utils.environment_manager import set_weather, set_lighting
+def apply_location_preset(channel_id: str, location: str, override: bool = True) -> List[str]:
+    """Apply environment preset for a location type.
+    
+    Args:
+        channel_id: Discord channel ID
+        location: Location name to apply preset for
+        override: If False, skip preset if custom lighting has been manually set
+    """
+    from utils.environment_manager import set_weather, set_lighting, get_lighting
+    
+    if not override:
+        current = get_lighting(channel_id)
+        if current and current.source and current.source not in ("", "natural", "time_based"):
+            return [f"📍 At: {location} (custom lighting preserved)"]
     
     results = []
     
@@ -1085,13 +1174,22 @@ def update_lighting_for_time(channel_id: str, time_state: TimeState):
     """Update lighting based on time for outdoor locations."""
     from utils.environment_manager import set_lighting, get_lighting
     
+    # Determine if current location is outdoor using preset/memory, not light source
+    current_loc = get_current_location(channel_id)
+    if current_loc:
+        memory = get_location_memory(channel_id, current_loc)
+        if memory and not memory.is_outdoor:
+            return  # Don't change lighting in indoor locations
+        # Check preset if no memory
+        if not memory:
+            loc_lower = current_loc.lower()
+            for name, preset in LOCATION_PRESETS.items():
+                if name in loc_lower or loc_lower in name:
+                    if not preset.get("is_outdoor", True):
+                        return  # Indoor preset — don't change lighting
+                    break
+    
     current = get_lighting(channel_id)
-    
-    # Only auto-update if source suggests outdoor
-    outdoor_sources = ["", "natural", "sunlight", "filtered sunlight", "time_based"]
-    if current.source and current.source.lower() not in outdoor_sources:
-        return  # Don't change indoor lighting
-    
     new_level = time_state.get_lighting_for_outdoor()
     if current.light_level != new_level:
         set_lighting(channel_id, new_level, "natural")

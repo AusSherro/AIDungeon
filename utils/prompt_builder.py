@@ -1,5 +1,206 @@
-"""Prompt builder utilities for the Discord bot."""
+"""Prompt builder utilities for the Discord bot.
 
+Constructs a token-budgeted system prompt for the AI DM with prioritized
+context sections and concise tag instructions.
+"""
+
+import logging
+from typing import Optional, Callable, List, Tuple
+
+from utils.character_manager import load_character
+
+# Context source imports — fail at startup, not silently at runtime
+from utils.npc_manager import get_nearby_npcs, get_faction_context_for_ai
+from utils.quest_manager import get_quest_context_for_ai
+from utils.environment_manager import get_environment_context_for_ai
+from utils.encounter_manager import get_travel_context_for_ai
+from utils.world_generator import get_world_context_for_ai
+from utils.world_map import get_world_context_for_ai as get_map_context
+from utils.session_manager import get_pacing_context_for_ai
+from utils.inventory_manager import get_party_inventory_context
+
+logger = logging.getLogger(__name__)
+
+# ~1500 tokens ≈ 6000 characters
+MAX_CONTEXT_CHARS = 6000
+
+DIFFICULTY_GUIDE = {
+    "easy": "Be generous with successes and helpful hints. Most DCs 10-12.",
+    "normal": "Standard D&D 5e difficulty. DCs 10-18 based on task.",
+    "hard": "Be challenging. DCs 15-22, real consequences.",
+}
+
+
+# =============================================================================
+# Context getters — each returns a (name, text) or empty string
+# =============================================================================
+
+def _combat_context(state: dict, channel_id: str) -> str:
+    """If in combat, that's the #1 context."""
+    combat = state.get("combat") or state.get("in_combat")
+    if not combat:
+        return ""
+    # Compact summary of who's in the fight
+    combatants = state.get("combat", {}).get("combatants", [])
+    if not combatants:
+        return ""
+    lines = ["**Active Combat:**"]
+    for c in combatants:
+        hp = f"{c.get('hp', '?')}/{c.get('max_hp', c.get('hp', '?'))}"
+        lines.append(f"- {c['name']} HP:{hp} AC:{c.get('ac', '?')}")
+    return "\n".join(lines)
+
+
+def _campaign_summary_context(state: dict, _channel_id: str) -> str:
+    summary = state.get("campaign_summary", "")
+    if summary:
+        return f"**Story So Far:** {summary}"
+    return ""
+
+
+def _quest_context(_state: dict, channel_id: str) -> str:
+    return get_quest_context_for_ai(channel_id) or ""
+
+
+def _npc_context(state: dict, channel_id: str) -> str:
+    location = state.get("location", "")
+    nearby = get_nearby_npcs(channel_id, location)
+    if not nearby:
+        return ""
+    disp_map = {-2: "hostile", -1: "unfriendly", 0: "neutral", 1: "friendly", 2: "allied"}
+    lines = ["**Nearby NPCs:**"]
+    for npc in nearby[:5]:
+        disp = disp_map.get(npc.disposition, "neutral")
+        lines.append(f"- {npc.name} ({npc.race} {npc.role}): {disp}")
+    faction = get_faction_context_for_ai(channel_id)
+    if faction:
+        lines.append(faction)
+    return "\n".join(lines)
+
+
+def _environment_context(_state: dict, channel_id: str) -> str:
+    return get_environment_context_for_ai(channel_id) or ""
+
+
+def _world_context(_state: dict, channel_id: str) -> str:
+    return get_world_context_for_ai(channel_id) or ""
+
+
+def _travel_context(_state: dict, channel_id: str) -> str:
+    return get_travel_context_for_ai(channel_id) or ""
+
+
+def _pacing_context(_state: dict, channel_id: str) -> str:
+    return get_pacing_context_for_ai(channel_id) or ""
+
+
+def _map_context(_state: dict, channel_id: str) -> str:
+    return get_map_context(channel_id) or ""
+
+
+def _inventory_context(state: dict, _channel_id: str) -> str:
+    players = state.get("players", [])
+    if players:
+        return get_party_inventory_context(players) or ""
+    return ""
+
+
+# Priority order — combat & campaign summary first, polish last
+CONTEXT_PRIORITY: List[Tuple[str, Callable]] = [
+    ("combat", _combat_context),
+    ("campaign_summary", _campaign_summary_context),
+    ("quests", _quest_context),
+    ("npcs", _npc_context),
+    ("environment", _environment_context),
+    ("world", _world_context),
+    ("travel", _travel_context),
+    ("pacing", _pacing_context),
+    ("map", _map_context),
+    ("inventory", _inventory_context),
+]
+
+
+def _build_context_sections(state: dict, channel_id: Optional[str]) -> str:
+    """Gather context sections in priority order, stopping at the token budget."""
+    if not channel_id:
+        return ""
+
+    sections: list[str] = []
+    total = 0
+
+    for name, getter in CONTEXT_PRIORITY:
+        try:
+            section = getter(state, channel_id)
+            if section and total + len(section) < MAX_CONTEXT_CHARS:
+                sections.append(section)
+                total += len(section)
+        except Exception:
+            logger.debug("Context source '%s' failed, skipping", name)
+            continue
+
+    return "\n\n".join(sections)
+
+
+# =============================================================================
+# Tag instruction blocks — conditional on game state
+# =============================================================================
+
+_COMBAT_TAG_INSTRUCTIONS = """\
+**Tags — Combat:**
+[COMBAT: <count> <creature>, ...] — triggers combat. [SURPRISE: enemies|party] — ambush.
+Do NOT ask for initiative rolls — the system handles that."""
+
+_ENVIRONMENT_TAG_INSTRUCTIONS = """\
+**Tags — Environment (optional, only on significant changes):**
+[WEATHER: rain] · [LIGHTING: dim] · [LOCATION: Dark Cave] · [TIME: 3 hours pass] · [TRAP: pit trap] · [HAZARD: lava pool, 2d6 fire]"""
+
+_QUEST_TAG_INSTRUCTIONS = """\
+**Tags — Quests:**
+[QUEST: name="...", type=rescue, difficulty=hard, giver="NPC"] · [QUEST_COMPLETE: "Name"] · [QUEST_PROGRESS: "Name", objective=1]
+[RUMOR: "hint text"] · [QUEST_HOOK: name="...", description="..."] · [OBJECTIVE: "new objective"] · [QUEST_CHAIN: parent="A", child="B"]"""
+
+_TRAVEL_TAG_INSTRUCTIONS = """\
+**Tags — Travel:**
+[TRAVEL: destination="Place", distance=15, terrain=forest] · [ARRIVAL: "Place"]
+[LOCATION_DISCOVERED: name="Ruins", terrain=hills, type=ruins, poi=true] · [DISTANCE_REVEALED: from="A" to="B" miles=100]"""
+
+_SKILL_CHECK_INSTRUCTIONS = """\
+**Skill Checks:**
+When the action is SPECIFIC and COMMITTED → ask for the check: "🎲 Roll [Skill] (DC [number])!" then STOP.
+When the action is VAGUE → describe the situation and present 3 options, no roll yet."""
+
+
+def _build_tag_instructions(state: dict) -> str:
+    """Return concise tag instructions, conditional on game state."""
+    parts: list[str] = []
+
+    in_combat = state.get("in_combat", False)
+
+    # Always include combat tags (unless already in combat)
+    if not in_combat:
+        parts.append(_COMBAT_TAG_INSTRUCTIONS)
+
+    parts.append(_ENVIRONMENT_TAG_INSTRUCTIONS)
+    parts.append(_QUEST_TAG_INSTRUCTIONS)
+
+    # Only include travel tags when NOT actively traveling
+    if not state.get("traveling"):
+        parts.append(_TRAVEL_TAG_INSTRUCTIONS)
+
+    parts.append(_SKILL_CHECK_INSTRUCTIONS)
+
+    if not in_combat:
+        parts.append(
+            "**End with 3 short action suggestions** (only when NOT asking for a roll and NOT in combat):\n"
+            "💡 **What will you do?**\n1. [Option] 2. [Option] 3. [Option]"
+        )
+
+    return "\n\n".join(parts)
+
+
+# =============================================================================
+# PUBLIC API
+# =============================================================================
 
 def build_system_prompt(state: dict, channel_id: str = None) -> str:
     """Return a system prompt describing the current campaign state."""
@@ -12,275 +213,30 @@ def build_system_prompt(state: dict, channel_id: str = None) -> str:
     party_comp = analyze_party_composition(state.get("players", []))
     actions_text = summarize_actions(recent_actions)
 
-    # Difficulty affects DC and encounter severity
-    difficulty_guide = {
-        "easy": "Be generous with successes and provide helpful hints. Most DCs are 10-12.",
-        "normal": "Use standard D&D 5e difficulty. DCs range from 10-18 based on task.",
-        "hard": "Be challenging. Enemies are tougher, DCs range 15-22, and consequences are real."
-    }
-    
-    # Get NPC context if channel_id provided
-    npc_context = ""
-    faction_context = ""
-    quest_context = ""
-    if channel_id:
-        try:
-            from utils.npc_manager import get_nearby_npcs, get_faction_context_for_ai
-            nearby_npcs = get_nearby_npcs(channel_id, location)
-            if nearby_npcs:
-                npc_lines = []
-                for npc in nearby_npcs[:5]:  # Limit to 5 nearby NPCs
-                    disp_word = {-2: "hostile", -1: "unfriendly", 0: "neutral", 1: "friendly", 2: "allied"}.get(npc.disposition, "neutral")
-                    npc_lines.append(f"- {npc.name} ({npc.race} {npc.role}): {disp_word}, mood: {npc.current_mood}")
-                    if npc.memory.knows_names:
-                        npc_lines.append(f"  Knows: {', '.join(npc.memory.knows_names)}")
-                npc_context = "\n**Nearby NPCs:**\n" + "\n".join(npc_lines)
-            
-            faction_context = get_faction_context_for_ai(channel_id)
-            if faction_context:
-                faction_context = "\n" + faction_context
-        except Exception:
-            pass  # If NPC manager not available, skip
-        
-        # Get quest context
-        try:
-            from utils.quest_manager import get_quest_context_for_ai
-            quest_context = get_quest_context_for_ai(channel_id)
-            if quest_context:
-                quest_context = "\n\n" + quest_context
-        except Exception:
-            pass  # If quest manager not available, skip
-    
-    # Get environment context if channel_id provided
-    environment_context = ""
-    if channel_id:
-        try:
-            from utils.environment_manager import get_environment_context_for_ai
-            environment_context = get_environment_context_for_ai(channel_id)
-            if environment_context:
-                environment_context = "\n\n" + environment_context
-        except Exception:
-            pass  # If environment manager not available, skip
-    
-    # Get travel context if channel_id provided
-    travel_context = ""
-    if channel_id:
-        try:
-            from utils.encounter_manager import get_travel_context_for_ai
-            travel_context = get_travel_context_for_ai(channel_id)
-            if travel_context:
-                travel_context = "\n\n" + travel_context
-        except Exception:
-            pass  # If encounter manager not available, skip
-    
-    # Get world/time context if channel_id provided
-    world_context = ""
-    if channel_id:
-        try:
-            from utils.world_generator import get_world_context_for_ai
-            world_context = get_world_context_for_ai(channel_id)
-            if world_context:
-                world_context = "\n\n" + world_context
-        except Exception:
-            pass  # If world generator not available, skip
-    
-    # Get world map context if channel_id provided
-    world_map_context = ""
-    if channel_id:
-        try:
-            from utils.world_map import get_world_context_for_ai as get_map_context
-            world_map_context = get_map_context(channel_id)
-            if world_map_context:
-                world_map_context = "\n\n" + world_map_context
-        except Exception:
-            pass  # If world map not available, skip
-    
-    # Get session pacing context if channel_id provided
-    session_pacing_context = ""
-    if channel_id:
-        try:
-            from utils.session_manager import get_pacing_context_for_ai
-            session_pacing_context = get_pacing_context_for_ai(channel_id)
-            if session_pacing_context:
-                session_pacing_context = "\n\n" + session_pacing_context
-        except Exception:
-            pass  # If session manager not available, skip
-    
-    # Get inventory/equipment context for party
-    inventory_context = ""
-    if channel_id:
-        try:
-            from utils.inventory_manager import get_party_inventory_context
-            players = state.get("players", [])
-            if players:
-                inventory_context = get_party_inventory_context(players)
-                if inventory_context:
-                    inventory_context = "\n" + inventory_context
-        except Exception:
-            pass  # If inventory manager not available, skip
+    diff_text = DIFFICULTY_GUIDE.get(difficulty, DIFFICULTY_GUIDE["normal"])
 
-    system_prompt = f"""You are the Dungeon Master for a Discord-based D&D 5e campaign. Your role is to narrate the story, control NPCs, and respond to player actions with immersive descriptions.
+    # Build prioritised dynamic context
+    dynamic_context = _build_context_sections(state, channel_id)
 
-**Campaign Details:**
-- Title: {title}
-- Realm: {realm}
-- Current Location: {location}
-- Plot: {plot}
-- Difficulty: {difficulty} - {difficulty_guide.get(difficulty, difficulty_guide['normal'])}
+    # Build conditional tag instructions
+    tag_instructions = _build_tag_instructions(state)
 
-**Party:** {party_comp if party_comp else 'Unknown adventurers'}{inventory_context}
+    system_prompt = f"""You are the Dungeon Master for a Discord-based D&D 5e campaign.
 
-**Recent Events:** {actions_text if actions_text else 'The adventure begins...'}{npc_context}{faction_context}{quest_context}{environment_context}{travel_context}{world_context}{world_map_context}{session_pacing_context}
+**Campaign:** {title} | **Realm:** {realm} | **Location:** {location}
+**Plot:** {plot}
+**Difficulty:** {difficulty} — {diff_text}
+**Party:** {party_comp if party_comp else 'Unknown adventurers'}
 
-**Your Response Style:**
-1. Describe the scene and NPC reactions vividly (2-3 sentences)
-2. Use [Voice: Character Name] tags for NPC dialogue
-3. Keep narration under 150 words
-4. NPCs should remember previous interactions and react accordingly to party reputation
-5. When the party makes progress on active quests, acknowledge it naturally in your narration
+**Recent Events:** {actions_text if actions_text else 'The adventure begins...'}
 
-**COMBAT TRIGGERS:**
-When hostile creatures attack or combat should begin:
-1. Include a structured combat tag on its own line: [COMBAT: 3 goblins, 1 hobgoblin captain]
-   - Format: [COMBAT: <count> <creature>, <count> <creature>, ...]
-   - Use standard monster names (goblin, orc, skeleton, zombie, wolf, etc.)
-2. If players are ambushed, add [SURPRISE: enemies] 
-3. If players ambush enemies, add [SURPRISE: party]
-4. DO NOT ask for initiative rolls - the system handles that automatically
+{dynamic_context}
 
-Example combat narration:
-"The goblins burst from the shadows, screeching war cries!
-[COMBAT: 3 goblins, 1 goblin boss]
-[SURPRISE: enemies]"
+**Response Style:**
+1. Describe scene and NPC reactions vividly (2-3 sentences). Use [Voice: NPC Name] for dialogue.
+2. Keep narration under 150 words. NPCs remember previous interactions.
 
-When a player declares an attack ("I attack the guard"):
-- Describe the action dramatically
-- Include [COMBAT: <enemies>] to trigger combat
-- The system will handle initiative and turn order
-
-**ENVIRONMENT TAGS:**
-When the environment changes significantly, use these optional tags:
-- [WEATHER: rain] or [WEATHER: heavy rain, intensity 2] - weather changes
-- [LIGHTING: dim] or [LIGHTING: darkness, source: no windows] - lighting changes
-- [LOCATION: Dark Cave] - entering a new area (auto-applies presets for caves, dungeons, forests, etc.)
-- [TIME: 3 hours pass] or [TIME: night] - time advancement
-- [TRAP: pit trap at entrance] - hidden trap placement
-- [HAZARD: lava pool, 2d6 fire] - environmental hazard
-
-You don't need to use these for every narration - only when:
-1. The party enters a distinctly different location (cave, dungeon, outdoors)
-2. Weather conditions change dramatically
-3. Time passes significantly (rests, travel, waiting)
-4. You want to place a trap or hazard
-
-The system will auto-apply appropriate lighting and weather based on location presets.
-
-**QUEST TAGS (Phase 13 - Autonomous Quest Management):**
-When NPCs offer quests or story events reveal new objectives, use these structured tags:
-
-NEW QUEST (when an NPC offers or gives a quest):
-[QUEST: name="Quest Name", type=rescue, difficulty=hard, giver="NPC Name"]
-- Types: main, side, bounty, fetch, rescue, escort, explore, mystery
-- Difficulty: trivial, easy, medium, hard, deadly, epic
-
-QUEST COMPLETE (when a quest is finished):
-[QUEST_COMPLETE: "Quest Name"]
-
-QUEST PROGRESS (when an objective is achieved):
-[QUEST_PROGRESS: "Quest Name", objective=1, amount=1]
-
-NEW OBJECTIVE (to add objectives to the current quest):
-[OBJECTIVE: "New objective description"]
-
-RUMORS & HOOKS (for future quest hints):
-[RUMOR: "Strange lights have been seen near the old cemetery"]
-[QUEST_HOOK: name="Investigate the Cemetery", description="Something awakens in the graveyard"]
-
-QUEST CHAINS (link quests sequentially):
-[QUEST_CHAIN: parent="Main Quest", child="Follow-up Quest"]
-
-Use these tags when:
-1. An NPC explicitly offers or assigns a quest
-2. The party completes a quest objective or the entire quest
-3. An NPC mentions rumors that could lead to adventures
-4. Story events reveal new objectives or quest opportunities
-
-Example NPC offering a quest:
-"The blacksmith pounds his hammer, then looks up with worried eyes. 'Travelers! My daughter was taken by goblins. Please, bring her back safely!'
-[QUEST: name=\"Rescue the Blacksmith's Daughter\", type=rescue, difficulty=medium, giver=\"Thorin the Blacksmith\"]"
-
-Example quest completion:
-"You hand the ancient artifact to the wizard, who weeps with joy. 'At last! You've saved our village!'
-[QUEST_COMPLETE: \"Retrieve the Sunstone\"]"
-
-**TRAVEL & EXPLORATION TAGS (Phase 14 - Intelligent Travel):**
-When the party travels or discovers new locations, use these tags:
-
-STARTING TRAVEL (when party begins a journey):
-[TRAVEL: destination="Location Name", distance=15, terrain=forest]
-- Only use when party explicitly decides to travel somewhere
-- distance is in miles, terrain is the dominant terrain type
-
-DISCOVERING LOCATIONS (when NPCs mention or party discovers places):
-[LOCATION_DISCOVERED: name="Ruined Tower", terrain=hills, type=ruins, poi=true]
-- Types: city, town, village, dungeon, cave, ruins, tower, castle, temple, shrine, inn, mine, etc.
-- poi=true for significant locations worth investigating
-
-ARRIVAL (when party reaches their destination):
-[ARRIVAL: "Location Name"]
-- Use when the journey is complete and party has arrived
-
-DISTANCE INFORMATION (when distance is revealed):
-[DISTANCE_REVEALED: from="Neverwinter" to="Phandalin" miles=100]
-- Use when NPCs or maps reveal travel distances
-
-Use these tags when:
-1. Party announces intention to travel ("We head to Phandalin")
-2. NPCs mention distant locations the party hasn't heard of
-3. Party arrives at a destination after traveling
-4. Maps or NPCs reveal how far places are from each other
-
-Example travel narration:
-"The road to Cragmaw Castle winds through the Neverwinter Wood. The journey will take most of the day.
-[TRAVEL: destination=\"Cragmaw Castle\", distance=15, terrain=forest]"
-
-Example location discovery:
-"The old dwarf strokes his beard. 'Aye, there's an abandoned mine in those hills. Wave Echo Cave, they called it.'
-[LOCATION_DISCOVERED: name=\"Wave Echo Cave\", terrain=hills, type=mine, poi=true]
-[DISTANCE_REVEALED: from=\"Phandalin\" to=\"Wave Echo Cave\" miles=20]"
-
-Example arrival:
-"As the sun sets, you finally see the welcoming lights of Phandalin's tavern through the trees.
-[ARRIVAL: \"Phandalin\"]"
-
-**CRITICAL - ACTION OPTIONS vs SKILL CHECKS:**
-When the player's action is VAGUE or presents MULTIPLE CHOICES:
-- Describe the situation
-- Present 3 action options
-- DO NOT ask for any roll yet - wait for the player to choose!
-
-When the player's action is SPECIFIC and COMMITTED (like "I pick the lock", "I sneak past", "I search the room"):
-- THEN ask for the appropriate skill check
-- Format: "🎲 Roll [Skill] (DC [number])!" - use this exact format
-- STOP after asking for the roll - do not narrate the outcome yet
-
-**Skill Check Reference:**
-- Sneaking, hiding → Stealth
-- Lockpicking, pickpocket → Sleight of Hand  
-- Lying, bluffing → Deception
-- Intimidating → Intimidation
-- Persuading → Persuasion
-- Climbing, jumping → Athletics
-- Searching → Investigation
-- Noticing → Perception
-- Tracking → Survival
-- Recalling lore → History/Arcana/Religion/Nature
-
-**End with 3 short action suggestions** (only when NOT asking for a roll and NOT in combat):
-💡 **What will you do?**
-1. [Action option]
-2. [Action option]
-3. [Action option]
+{tag_instructions}
 """
     return system_prompt
 
@@ -290,7 +246,6 @@ def summarize_actions(actions):
 
 
 def analyze_party_composition(players):
-    from utils.character_manager import load_character
     parts = []
     for pid in players:
         char = load_character(pid)

@@ -1,6 +1,6 @@
 import os
 import json
-import shutil
+import tempfile
 from threading import Lock
 import logging
 
@@ -9,6 +9,15 @@ logger = logging.getLogger(__name__)
 STATE_DIR = os.path.join(os.path.dirname(__file__), '..', 'state')
 os.makedirs(STATE_DIR, exist_ok=True)
 _state_locks = {}
+_meta_lock = Lock()
+
+
+def _get_lock(session_id):
+    """Get or create a lock for a session, protected by a meta-lock."""
+    with _meta_lock:
+        if session_id not in _state_locks:
+            _state_locks[session_id] = Lock()
+        return _state_locks[session_id]
 
 # Default structure for a channel's campaign state
 DEFAULT_STATE = {
@@ -30,6 +39,8 @@ DEFAULT_STATE = {
     "pending_roll": None,       # {player_id, skill, dc, action} - waiting for a roll
     "in_combat": False,
     "free_form": True,          # If True, anyone can act. If False, strict turn order
+    "session_active": False,
+    "session_started_at": None,
 }
 
 def _get_state_path(session_id):
@@ -44,52 +55,46 @@ def _ensure_defaults(state: dict) -> dict:
 
 def load_state(session_id):
     path = _get_state_path(session_id)
-    if not os.path.exists(path):
-        return _ensure_defaults({})
-    
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            return _ensure_defaults(data)
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to load state for {session_id}: {e}")
-        return _ensure_defaults({})
-    except Exception as e:
-        logger.error(f"Unexpected error loading state: {e}")
-        return _ensure_defaults({})
+    lock = _get_lock(session_id)
+    with lock:
+        if not os.path.exists(path):
+            return _ensure_defaults({})
+        
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return _ensure_defaults(data)
+        except json.JSONDecodeError as e:
+            logger.error(f"Corrupted state file for {session_id}: {e}")
+            # Preserve corrupted file for debugging
+            corrupted_path = f"{path}.corrupted"
+            try:
+                os.replace(path, corrupted_path)
+                logger.info(f"Renamed corrupted file to {corrupted_path}")
+            except OSError as rename_err:
+                logger.error(f"Failed to rename corrupted file: {rename_err}")
+            return _ensure_defaults({})
+        except Exception as e:
+            logger.error(f"Unexpected error loading state for {session_id}: {e}")
+            return _ensure_defaults({})
 
 def save_state(session_id, state):
     path = _get_state_path(session_id)
-    lock = _state_locks.setdefault(session_id, Lock())
+    lock = _get_lock(session_id)
     
-    try:
-        with lock:
-            # Create backup before saving
-            if os.path.exists(path):
-                shutil.copy2(path, f"{path}.backup")
-            
-            with open(path, 'w', encoding='utf-8') as f:
+    with lock:
+        temp_fd, temp_path = tempfile.mkstemp(dir=STATE_DIR, suffix='.tmp')
+        try:
+            with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
                 json.dump(state, f, indent=2, ensure_ascii=False)
-                
-            # Clean up old backup after successful save
-            backup_path = f"{path}.backup"
-            if os.path.exists(backup_path):
-                try:
-                    os.remove(backup_path)
-                except:
-                    pass  # Ignore backup cleanup errors
-                    
-    except Exception as e:
-        logger.error(f"Failed to save state for {session_id}: {e}")
-        # Restore backup if save failed
-        backup_path = f"{path}.backup"
-        if os.path.exists(backup_path):
+            os.replace(temp_path, path)  # Atomic on all platforms
+        except Exception as e:
+            logger.error(f"Failed to save state for {session_id}: {e}")
             try:
-                shutil.copy2(backup_path, path)
-                logger.info(f"Restored backup for {session_id}")
-            except Exception as restore_error:
-                logger.error(f"Failed to restore backup: {restore_error}")
-        raise
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
 
 
 def add_prompt_entry(state: dict, role: str, content: str, max_entries: int = 10):
